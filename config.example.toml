@@ -40,8 +40,8 @@ retry_interval_s = 15
 eos_8bit = false
 
 # GPIB settings, as on NI MAX's GPIB settings page. The bridge sends them to the
-# box every time it connects (the box keeps them until it's power-cycled or
-# another client changes them). These are NI-488.2's defaults.
+# box every time it opens its session (each new session starts from the box's
+# own defaults, e.g. REN off). These are NI-488.2's defaults.
 gpib_address = 0          # the box's own primary address, 0-30
 gpib_secondary = -1       # its secondary address, 0-30, or -1 for none
 system_controller = true

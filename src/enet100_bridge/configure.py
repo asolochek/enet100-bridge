@@ -317,13 +317,14 @@ class Configurator:
             return
         ui = self.ui
         live: dict | None = None
+        live_label = "on the box now"
         extra = [("ifc_on_connect", "IFC on connect", "pulse IFC after connecting so the box "
                   "is controller-in-charge at once")]
         while True:
             ui.print("")
             ui.print(f"GPIB settings for {b.name} (sent to the box each time the bridge connects):")
             head = f"      {'setting':<27} {'configured':<11}"
-            ui.print(head + (" on the box now" if live else ""))
+            ui.print(head + (f" {live_label}" if live else ""))
             for n, s in enumerate(SETTINGS, 1):
                 v = getattr(b, s.key)
                 row = f"  {n:>2}. {s.label:<27} {s.fmt(v):<11}"
@@ -343,7 +344,12 @@ class Configurator:
                 live, how = read_gpib(self.cfg, b)
                 if live is None:
                     ui.print(f"  Couldn't read them: {how}")
+                elif how == "directly":
+                    live_label = "new-session default"
+                    ui.print("  Read directly. The bridge isn't running, so these are the defaults a")
+                    ui.print("  new session starts with; the bridge applies your settings over them.")
                 else:
+                    live_label = "on the box now"
                     ui.print(f"  Read {how}.")
                 continue
             if not c.isdigit() or not 1 <= int(c) <= n0 + len(extra):

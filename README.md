@@ -96,8 +96,10 @@ Found on the network:
 - **GPIB settings**: the box's GPIB address (primary and secondary), system
   controller, assert REN, automatic serial polling, CIC protocol, bus timing
   (T1), HS488 cable length, board timeout and IFC on connect. These are the
-  settings NI MAX offers. `l` reads the box's current values and marks any that
-  differ. The bridge sends the configured values every time it connects.
+  settings NI MAX offers. The bridge sends them each time it opens its session
+  with the box, because every new session starts from the box's defaults (REN
+  off, for one). `l` reads the values back: from the running bridge's session
+  if there is one, otherwise the defaults a new session gets.
 - **Network settings**: shows what the box reports about itself (IP, netmask,
   host name, MAC, firmware). The box gets these from DHCP, and neither this
   tool nor NI's can change them. For a fixed address or name, add a DHCP
@@ -107,11 +109,16 @@ Found on the network:
 With no `--config`, it edits the system config (`C:\ProgramData\enet100-bridge\config.toml`
 or `/etc/enet100-bridge/config.toml`). Restart the bridge afterwards.
 
-**If discovery finds nothing**: the box answers with a UDP broadcast, so a
-firewall rule that blocks Python drops it. On Windows, cancelling the
-"allow access" prompt creates a Block rule for that `python.exe`. The installer
-adds an Allow rule for its own copy and warns about Block rules. Broadcasts
-also don't cross routers, so a box on another subnet has to be added by address.
+**If discovery finds nothing**:
+- After answering a query, the box ignores new ones for about 10 s.
+  Discovery waits that out and asks again, so a search can take ~11 s, but
+  another tool searching at the same moment can still collide with it. Try
+  again.
+- Broadcasts don't cross routers, so a box on another subnet has to be added
+  by address.
+- The answer is a UDP broadcast, so a host firewall that blocks inbound UDP for
+  Python drops it. The Windows installer adds a rule for discovery replies, and
+  warns if an active Block rule covers the bridge's Python.
 
 ## Use
 

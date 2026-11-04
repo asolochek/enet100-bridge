@@ -187,12 +187,13 @@ What the box does with a modified record is unknown, so don't send one.
 ## GPIB (board) settings
 
 The settings NI MAX offers for the box are board options, read with ibask
-(0x4E) and set with ibconfig (0x06) on the board session **(live)**. The box
-keeps them across sessions until it is power-cycled. A new session sees
-whatever the last client left, so a client should set what it wants on every
-connect.
+(0x4E) and set with ibconfig (0x06) on the board session **(live)**. They
+belong to the session: REN and bus timing set in one session were back at the
+defaults in the next **(live)**. So a client sets what it wants each time it
+opens a board session. NI's driver presumably does the same with the values
+MAX stores on the PC.
 
-| option | setting | values | value on a box after NI use |
+| option | setting | values | value in a new session |
 |--------|---------|--------|-----------------------------|
 | 0x01 | primary address | 0–30 | 0 |
 | 0x02 | secondary address | 0 = none, 0x60–0x7E | 0 |
@@ -200,7 +201,7 @@ connect.
 | 0x07 | automatic serial polling | 0/1 | 1 |
 | 0x08 | CIC protocol | 0/1 | 0 |
 | 0x0A | system controller | 0/1 | 1 |
-| 0x0B | assert REN when SC | 0/1 | 0 (left off by a client) |
+| 0x0B | assert REN when SC | 0/1 | 0 |
 | 0x10 | parallel poll config | | 0 |
 | 0x11 | bus timing (T1) | 1 = 2 µs, 2 = 500 ns, 3 = 350 ns | 2 |
 | 0x17 | send LLO | | 0 |

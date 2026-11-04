@@ -48,7 +48,12 @@ function Assert-Admin {
     }
 }
 
+# Windows PowerShell 5.1 turns a native program's stderr into a terminating error
+# when $ErrorActionPreference is 'Stop' and stderr is redirected. Functions that run
+# programs set it to 'Continue' locally and check $LASTEXITCODE instead.
+
 function Find-Python {
+    $ErrorActionPreference = 'Continue'
     if ($Python) { return $Python }
     $candidates = @()
     if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -64,14 +69,22 @@ function Find-Python {
     throw 'Python 3.11 or newer was not found. Install it from python.org (for all users), or pass -Python <path to python.exe>.'
 }
 
+# Run the bridge CLI attached to the console (configure is interactive, so never pipe
+# this). Callers check $LASTEXITCODE.
 function Invoke-Bridge([string[]]$BridgeArgs) {
+    $ErrorActionPreference = 'Continue'
     & $VenvPy -m enet100_bridge @BridgeArgs
 }
 
+function Invoke-BridgeQuiet([string[]]$BridgeArgs) {
+    $ErrorActionPreference = 'Continue'
+    & $VenvPy -m enet100_bridge @BridgeArgs *> $null
+}
+
 function Stop-Bridge {
-    if (Test-Path $VenvPy) {
+    if ((Test-Path $VenvPy) -and (Test-Path $ConfigFile)) {
         # Ask for a clean shutdown first: the box must see its sessions closed properly.
-        Invoke-Bridge @('stop', '--config', $ConfigFile) 2>$null | Out-Null
+        Invoke-BridgeQuiet @('stop', '--config', $ConfigFile)
         for ($i = 0; $i -lt 20; $i++) {
             $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
             if (-not $t -or $t.State -ne 'Running') { break }
@@ -91,6 +104,7 @@ function Write-Config {
             return
         }
         Invoke-Bridge @('configure', '--config', $ConfigFile, '--add', $EnetHost, '--log-file', $log)
+        if ($LASTEXITCODE -ne 0) { throw 'Writing the config failed.' }
         return
     }
     if (Test-Path $ConfigFile) {
@@ -105,13 +119,25 @@ function Write-Config {
 }
 
 function Test-BlockRules {
-    # A Block rule on the bridge's python.exe (e.g. from cancelling the firewall prompt)
-    # silently drops discovery replies and VXI-11 connections.
-    $blocks = Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
-        Where-Object { $_.Program -and ($_.Program -ieq $VenvPy) } |
-        Get-NetFirewallRule | Where-Object { $_.Action -eq 'Block' -and $_.Enabled -eq 'True' }
-    foreach ($r in $blocks) {
-        Write-Warning "Firewall rule '$($r.DisplayName)' blocks $VenvPy. Discovery and clients won't work until it is removed or set to Allow."
+    # A Block rule on the interpreter (e.g. from cancelling the firewall prompt) beats
+    # our Allow rules. The venv's python.exe is a launcher: the bridge actually runs as
+    # the base interpreter, so check both. Only rules for profiles that are switched on
+    # and in use by a connected network matter.
+    $ErrorActionPreference = 'Continue'
+    $exes = @($VenvPy)
+    $base = & $VenvPy -c "import sys; print(getattr(sys, '_base_executable', sys.executable))" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $base) { $exes += $base.Trim() }
+    $active = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | ForEach-Object {
+            switch ([string]$_.NetworkCategory) { 'DomainAuthenticated' { 'Domain' } default { [string]$_ } } } |
+        Where-Object { (Get-NetFirewallProfile -Name $_ -ErrorAction SilentlyContinue).Enabled })
+    $rules = Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+        Where-Object { $p = $_.Program; $p -and ($exes | Where-Object { $_ -ieq $p }) } |
+        Get-NetFirewallRule | Where-Object { $_.Action -eq 'Block' -and $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' }
+    foreach ($r in $rules) {
+        $prof = [string]$r.Profile
+        if ($prof -eq 'Any' -or ($active | Where-Object { $prof -match $_ })) {
+            Write-Warning "Firewall rule '$($r.DisplayName)' ($prof) blocks inbound traffic for $($exes -join ' / '). Discovery and VISA clients won't reach the bridge until it is removed or set to Allow."
+        }
     }
 }
 
@@ -124,8 +150,9 @@ function Set-Firewall {
     New-NetFirewallRule @common -DisplayName 'enet100-bridge portmapper (TCP 111)' -Protocol TCP -LocalPort 111 | Out-Null
     New-NetFirewallRule @common -DisplayName 'enet100-bridge portmapper (UDP 111)' -Protocol UDP -LocalPort 111 | Out-Null
     New-NetFirewallRule @common -DisplayName 'enet100-bridge VXI-11' -Protocol TCP -LocalPort $core, $abort | Out-Null
-    # Discovery answers arrive as UDP broadcasts to an ephemeral port.
-    New-NetFirewallRule @common -DisplayName 'enet100-bridge discovery replies' -Protocol UDP -RemotePort 44515 -Program $VenvPy | Out-Null
+    # Discovery answers arrive as UDP broadcasts from port 44515 to an ephemeral port.
+    # Not tied to a program: the venv's python.exe is a launcher for the base interpreter.
+    New-NetFirewallRule @common -DisplayName 'enet100-bridge discovery replies' -Protocol UDP -RemotePort 44515 | Out-Null
     Write-Verbose "Firewall: allowed TCP/UDP 111, TCP $core,$abort, UDP from :44515"
 }
 
@@ -186,14 +213,18 @@ $py = Find-Python
 Write-Host "Using Python: $py"
 Stop-Bridge
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
+$ErrorActionPreference = 'Continue'     # pip writes notices to stderr; check exit codes
 if (-not (Test-Path $VenvPy)) {
     & $py -m venv $Venv
     if ($LASTEXITCODE -ne 0) { throw 'Creating the virtual environment failed.' }
 }
-& $VenvPy -m pip install --quiet --upgrade pip
-& $VenvPy -m pip install --quiet --upgrade $RepoDir
+& $VenvPy -m pip install --quiet --disable-pip-version-check --force-reinstall --no-deps $RepoDir
 if ($LASTEXITCODE -ne 0) { throw 'pip install failed.' }
+$ErrorActionPreference = 'Stop'
 Write-Host "Installed into $Venv"
+if ($py -like "$env:USERPROFILE\*") {
+    Write-Warning "Python is installed for your user only ($py). The bridge runs as SYSTEM from a venv based on it, so uninstalling or upgrading that Python breaks the bridge until you run this installer again. An all-users Python avoids that."
+}
 
 Test-Port111
 # Firewall first: discovery replies are broadcasts and are dropped without a rule.

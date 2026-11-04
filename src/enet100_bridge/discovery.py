@@ -204,10 +204,10 @@ def is_present(host: str, timeout: float = 12.0) -> BoxInfo | None:
 
 
 NO_REPLY_HINT = (
-    "No GPIB-ENET box answered. Boxes answer discovery with a UDP broadcast, so check:\n"
-    "  - the host firewall allows inbound UDP for this program (on Windows, look for a\n"
-    "    Block rule on python.exe in 'Windows Defender Firewall > Inbound Rules';\n"
-    "    cancelling the 'allow access' prompt creates one)\n"
-    "  - the box is on the same subnet (broadcasts don't cross routers)\n"
+    "No GPIB-ENET box answered. Things to check:\n"
     "  - the box finished booting (give it about a minute after power-on)\n"
+    "  - another tool searched at the same moment (the box ignores queries for ~10 s\n"
+    "    after answering one); try again\n"
+    "  - the box is on the same subnet (broadcasts don't cross routers)\n"
+    "  - no firewall blocks inbound UDP for this Python (the answer is a broadcast)\n"
     "You can always enter the box's IP address instead.")

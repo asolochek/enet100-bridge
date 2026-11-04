@@ -181,6 +181,6 @@ def test_configure_gpib_screen(tmp_path, monkeypatch, fake):
     p = tmp_path / "c.toml"
     assert Configurator(cfg, p, ui).run()
     assert load_config(p).boxes[0].bus_timing_ns == 2000
-    assert any("Read directly" in l for l in out)
+    assert any("Read directly" in l for l in out) and any("new-session default" in l for l in out)
     assert any("Assert REN when SC" in l and "<- differs" in l for l in out)
     assert any("must be 0..30" in l for l in out)

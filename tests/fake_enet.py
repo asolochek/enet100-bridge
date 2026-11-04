@@ -61,10 +61,12 @@ class FakeEnet:
         self.violations: list[str] = []
         self.ren = False
         self.cic = False                         # becomes CIC on IFC, like the real box
-        # Board options as a real box reported them (NI-488.2 IbcXXX codes).
-        self.board_opts = {0x01: 0, 0x02: 0, 0x03: 13, 0x07: 1, 0x08: 0, 0x0A: 1, 0x0B: 0,
+        # Board options a new board session starts with, as a real box reported
+        # them (NI-488.2 IbcXXX codes). Like the box, they reset per session.
+        self.default_board_opts = {0x01: 0, 0x02: 0, 0x03: 13, 0x07: 1, 0x08: 0, 0x0A: 1, 0x0B: 0,
                            0x10: 0, 0x11: 2, 0x17: 0, 0x19: 0, 0x1A: 1, 0x1F: 0, 0x20: 0,
                            0x21: 0}
+        self.board_opts = dict(self.default_board_opts)
         self.log: list[tuple[str, bytes]] = []
         self._lock = threading.RLock()
         self._bound: set[int] = set()            # client ports with a bound :5015
@@ -179,6 +181,8 @@ class FakeEnet:
     def _handle(self, st, cmd, args, data, c) -> bytes | None:
         if cmd == 0x0B:
             st["kind"] = "board"
+            self.board_opts = dict(self.default_board_opts)
+            self.ren = False
             extra = (b"GPIB-ENET  REV C.9\n" b"National Instruments Corp.        \n"
                      + bytes.fromhex("00802f123456") + socket.inet_aton("127.0.0.1")
                      + socket.inet_aton("127.0.0.1") + struct.pack("!H", st["port"])

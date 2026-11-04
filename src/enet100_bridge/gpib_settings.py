@@ -1,9 +1,10 @@
 """The GPIB (board) settings NI MAX offers for a GPIB-ENET/100.
 
 They live in the bridge's config and are sent to the box with board-level
-ibconfig every time the bridge connects, the way NI's driver applies the
-settings MAX stores. The box keeps them until it is power-cycled or another
-client changes them. Option codes are NI-488.2's IbcXXX values.
+ibconfig every time the bridge opens its board session, the way NI's driver
+applies the settings MAX stores. They belong to the session: each new board
+session starts from the box's defaults (REN off, T1 500 ns, ...). Option codes
+are NI-488.2's IbcXXX values.
 """
 
 from __future__ import annotations
