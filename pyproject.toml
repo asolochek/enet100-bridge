@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "VXI-11 server that makes NI GPIB-ENET/100 boxes usable from modern VISA libraries"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 keywords = ["gpib", "vxi-11", "visa", "national instruments", "gpib-enet", "test equipment"]
 classifiers = [

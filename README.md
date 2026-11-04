@@ -155,6 +155,10 @@ The tests run against `tests/fake_enet.py`, a simulated box that enforces the
 same wedge rule as the real one, so a change that would brick real hardware
 fails a test.
 
+## License
+
+MIT, see [LICENSE](LICENSE).
+
 ## Credits
 
 The protocol was decoded from packet captures of NI-488.2 17.6. ESRF's BLISS
