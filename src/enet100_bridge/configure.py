@@ -4,8 +4,7 @@ Finds GPIB-ENET/100 boxes by discovery (or takes an IP address), lets you pick
 and name them (gpib0, gpib1, ...), scans each box's bus for instruments, shows
 the box's network settings, and writes the config file.
 
-Changing a box's own network settings is not available yet: the settings-write
-record hasn't been decoded (see docs/PROTOCOL.md, "Changing network settings").
+The box's network settings come from DHCP, so they are shown but not edited.
 """
 
 from __future__ import annotations
@@ -300,11 +299,10 @@ class Configurator:
         p(f"  Gateway?     {info.addr_a6}   (offset 0xA6, meaning unconfirmed)")
         p(f"  DNS server?  {info.addr_aa}   (offset 0xAA, meaning unconfirmed)")
         p("")
-        p("Changing these from here isn't available yet: the box's settings-write")
-        p("record hasn't been decoded, and a wrong one can take the box off the")
-        p("network. docs/PROTOCOL.md ('Changing network settings') lists the capture")
-        p("needed to add it. Until then, use NI MAX on a PC with NI-488.2 17.6, or a")
-        p("DHCP reservation for the box's MAC address.")
+        p("The box gets these from DHCP; neither this tool nor NI's can change them.")
+        p(f"To give it a fixed address or name, add a DHCP reservation for {info.mac}")
+        p("on your DHCP server (it appears to take its host name from the reply too),")
+        p("then power-cycle the box and wait a minute.")
 
     # main loop -------------------------------------------------------------------------------
 

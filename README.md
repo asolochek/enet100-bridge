@@ -94,9 +94,9 @@ Found on the network:
   resource names. If the bridge is running, the scan goes through it (the box
   should have one client); otherwise configure opens a short session itself.
 - **Network settings**: shows what the box reports about itself (IP, netmask,
-  host name, MAC, firmware). Changing them isn't available yet: see
-  [docs/PROTOCOL.md](docs/PROTOCOL.md#changing-network-settings-not-decoded-yet)
-  for the capture that would make it possible.
+  host name, MAC, firmware). The box gets these from DHCP, and neither this
+  tool nor NI's can change them. For a fixed address or name, add a DHCP
+  reservation for the box's MAC address on your DHCP server.
 - Without a terminal: `enet100-bridge configure --add 192.168.1.50 [--name gpib1]`.
 
 With no `--config`, it edits the system config (`C:\ProgramData\enet100-bridge\config.toml`
