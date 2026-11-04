@@ -60,13 +60,22 @@ MAX_READ = 16 * 1024 * 1024
 _NAME_RE = re.compile(r"^\s*([a-z][a-z0-9_-]*?)(?:\s*,\s*(\d+)(?:\s*,\s*(\d+))?)?\s*$", re.I)
 
 
+GATEWAY_NAMES = ("inst0", "inst")
+
+
 @dataclass(frozen=True)
 class Target:
-    box: str
+    box: str               # "" = the bridge itself (inst0)
     pad: int | None        # None = the interface itself
     sad: int = 0
 
+    @property
+    def is_gateway(self) -> bool:
+        return self.box == ""
+
     def __str__(self) -> str:
+        if self.is_gateway:
+            return "inst0"
         if self.pad is None:
             return self.box
         return f"{self.box},{self.pad}" + (f",{self.sad}" if self.sad else "")
@@ -80,6 +89,7 @@ class Link:
     client_id: int
     srq_enabled: bool = False
     srq_handle: bytes = b""
+    outbuf: bytearray = field(default_factory=bytearray)    # inst0 replies
 
 
 class IntrChannel:
@@ -153,6 +163,9 @@ class Vxi11Server:
 
     def parse_target(self, name: str) -> Target | None:
         name = self.aliases.get(name.strip().lower(), name)
+        if name.strip().lower() in GATEWAY_NAMES:
+            # Discovery tools open inst0 and send *IDN?; answer as the bridge.
+            return Target("", None)
         m = _NAME_RE.match(name)
         if not m:
             return None
@@ -285,12 +298,13 @@ class Vxi11Server:
         if target is None:
             log.warning("create_link: unknown device %r", device)
             raise _GpibFailure(DEVICE_NOT_ACCESSIBLE)
-        box = self.boxes[target.box]
-        try:
-            box.ensure_open()
-        except BoxUnavailable as e:
-            log.warning("create_link %s: %s", device, e)
-            raise _GpibFailure(DEVICE_NOT_ACCESSIBLE)
+        if not target.is_gateway:
+            box = self.boxes[target.box]
+            try:
+                box.ensure_open()
+            except BoxUnavailable as e:
+                log.warning("create_link %s: %s", device, e)
+                raise _GpibFailure(DEVICE_NOT_ACCESSIBLE)
         with self._lock:
             lid = self._next_lid
             self._next_lid += 1
@@ -328,6 +342,9 @@ class Vxi11Server:
         lid, io_timeout, lock_timeout, flags, data = a.int(), a.uint(), a.uint(), a.int(), a.opaque()
         link = self._link(lid)
         self._acquire(link, flags, lock_timeout)
+        if link.target.is_gateway:
+            self._gateway_write(link, data)
+            return Packer().int(NO_ERROR).uint(len(data)).bytes()
 
         def op(box: Box):
             if link.target.pad is None:
@@ -346,6 +363,15 @@ class Vxi11Server:
         self._acquire(link, flags, lock_timeout)
         size = max(1, min(size, MAX_READ))
         termchar = term & 0xFF if flags & FLAG_TERMCHRSET else None
+        if link.target.is_gateway:
+            if not link.outbuf:
+                raise _GpibFailure(IO_TIMEOUT)
+            data = bytes(link.outbuf[:size])
+            del link.outbuf[:size]
+            reason = REASON_END if not link.outbuf else REASON_REQCNT
+            if reason == REASON_END and termchar is not None and data.endswith(bytes([termchar])):
+                reason |= REASON_CHR
+            return Packer().int(NO_ERROR).int(reason).opaque(data).bytes()
 
         def op(box: Box):
             with box.lock:
@@ -367,6 +393,8 @@ class Vxi11Server:
         lid, flags, lock_timeout, io_timeout = a.int(), a.int(), a.uint(), a.uint()
         link = self._link(lid)
         self._acquire(link, flags, lock_timeout)
+        if link.target.is_gateway:
+            return Packer().int(NO_ERROR).uint(0x10 if link.outbuf else 0).bytes()   # MAV
 
         def op(box: Box):
             with box.lock:
@@ -383,6 +411,10 @@ class Vxi11Server:
         link = self._link(lid)
         self._acquire(link, flags, lock_timeout)
         t = link.target
+        if t.is_gateway:
+            if proc == 15:                  # clear
+                link.outbuf.clear()
+            return Packer().int(NO_ERROR).bytes()
 
         def op(box: Box):
             with box.lock:
@@ -531,6 +563,8 @@ class Vxi11Server:
         cmd, network_order, datasize, data_in = a.int(), a.bool(), a.int(), a.opaque()
         link = self._link(lid)
         self._acquire(link, flags, lock_timeout)
+        if link.target.is_gateway:
+            raise _GpibFailure(OPERATION_NOT_SUPPORTED)
 
         def u16(b: bytes) -> int:
             if len(b) < 2:
@@ -573,6 +607,31 @@ class Vxi11Server:
 
         out = self._run(link, op)
         return Packer().int(NO_ERROR).opaque(out).bytes()
+
+    # -- inst0: the bridge's own identity ----------------------------------------------------
+
+    def identity(self) -> str:
+        from . import __version__
+        # *IDN? fields are comma-separated, so the box list uses "/".
+        boxes = "/".join(sorted(self.boxes)) or "none"
+        return (f"enet100-bridge,GPIB-ENET/100 VXI-11 bridge ({boxes}),"
+                f"{socket.gethostname()},{__version__}")
+
+    def _gateway_write(self, link: Link, data: bytes) -> None:
+        text = data.decode("latin-1", "replace")
+        for cmd in re.split(r"[;\r\n]+", text):
+            c = cmd.strip().upper()
+            if not c:
+                continue
+            log.info("inst0 from %s: %s", link.conn.peer[0] if link.conn else "?", cmd.strip())
+            if c == "*IDN?":
+                link.outbuf += (self.identity() + "\n").encode()
+            elif c in ("*RST", "*CLS"):
+                link.outbuf.clear()
+            elif c == "*OPC?":
+                link.outbuf += b"1\n"
+            elif c in ("*STB?", "*ESR?"):
+                link.outbuf += b"0\n"
 
     # -- abort channel ----------------------------------------------------------------------------
 

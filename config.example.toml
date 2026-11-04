@@ -18,6 +18,10 @@ admin_port = 9012         # localhost-only status/stop port; 0 disables it
 max_recv_size = 4096      # largest write chunk clients may send in one call
 log_level = "INFO"
 log_file = ""             # e.g. "C:/ProgramData/enet100-bridge/bridge.log"
+# Advertise the bridge over mDNS as a VXI-11 device (_vxi-11._tcp), as LXI
+# instruments do. Windows: through the system's mDNS service. Linux: Avahi.
+mdns = true
+mdns_name = ""            # default "enet100-bridge on <host name>"
 
 # One [[box]] per GPIB-ENET/100. `name` is the interface name clients use:
 #   TCPIP::<bridge host>::gpib0,4::INSTR    -> instrument at primary address 4

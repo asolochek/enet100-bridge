@@ -256,3 +256,37 @@ def test_portmapper_getport_and_dump():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_inst0_identifies_the_bridge(bridge, fake):
+    with client(bridge, "inst0") as c:
+        idn = c.query("*IDN?").strip()
+        assert idn.startswith("enet100-bridge,GPIB-ENET/100 VXI-11 bridge (gpib0),")
+        assert len(idn.split(",")) == 4
+        assert c.readstb() == 0
+        c.clear()
+        with pytest.raises(Vxi11Error) as ei:
+            c.read()                       # nothing queued
+        assert ei.value.code == IO_TIMEOUT
+    # inst0 never touches the box
+    assert not [k for k, _ in fake.log if k.startswith("dev")]
+
+
+def test_portmapper_callit_answers_only_for_our_programs():
+    pm = rpc.Portmapper()
+    pm.set(0x0607AF, 1, 6, 9010)
+    d = rpc.Dispatcher()
+    d.add(rpc.PMAP_PROG, rpc.PMAP_VERS, pm.handler)
+    srv = rpc.serve_udp(d, "127.0.0.1", 0)
+    port = srv.server_address[1]
+    try:
+        u = rpc.rpc_call_udp("127.0.0.1", port, rpc.PMAP_PROG, rpc.PMAP_VERS, 5,
+                             rpc.Packer().uint(0x0607AF).uint(1).uint(0).opaque(b"").bytes())
+        assert u.uint() == 9010 and u.opaque() == b""
+        with pytest.raises(OSError):        # unknown program: silence, so a timeout
+            rpc.rpc_call_udp("127.0.0.1", port, rpc.PMAP_PROG, rpc.PMAP_VERS, 5,
+                             rpc.Packer().uint(0x123456).uint(1).uint(0).opaque(b"").bytes(),
+                             timeout=0.5)
+    finally:
+        srv.shutdown()
+        srv.server_close()

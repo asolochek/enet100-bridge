@@ -93,6 +93,17 @@ class ProcUnavailable(Exception):
     pass
 
 
+class NoReply(Exception):
+    """Raised by a handler that must not answer (e.g. a broadcast CALLIT it can't serve)."""
+
+
+class UdpPeer:
+    """call.conn for UDP calls: just the sender's address."""
+
+    def __init__(self, peer):
+        self.peer = peer
+
+
 # handler(call) -> reply body bytes
 Handler = Callable[[RpcCall], bytes]
 
@@ -142,6 +153,8 @@ class Dispatcher:
             return accepted(xid, PROG_MISMATCH, Packer().uint(lo).uint(hi).bytes())
         try:
             body = handler(call)
+        except NoReply:
+            return None
         except ProcUnavailable:
             return accepted(xid, PROC_UNAVAIL)
         except XdrError:
@@ -234,7 +247,7 @@ def serve_udp(dispatcher: Dispatcher, host: str, port: int) -> socketserver.UDPS
     class H(socketserver.BaseRequestHandler):
         def handle(self):
             data, sock = self.request
-            reply = dispatcher.dispatch(data, None)
+            reply = dispatcher.dispatch(data, UdpPeer(self.client_address))
             if reply is not None:
                 sock.sendto(reply, self.client_address)
 
@@ -257,13 +270,29 @@ class Portmapper:
 
     def handler(self, call: RpcCall) -> bytes:
         a = call.args
+        peer = call.conn.peer[0] if call.conn is not None else "?"
+        kind = "TCP" if isinstance(call.conn, ConnContext) else "UDP"
         if call.proc == 0:                                   # NULL
+            log.info("portmapper: NULL from %s (%s)", peer, kind)
             return b""
         if call.proc == 3:                                   # GETPORT
             prog, vers, prot, _ = a.uint(), a.uint(), a.uint(), a.uint()
             port = self.mappings.get((prog, vers, prot), 0)
+            log.info("portmapper: GETPORT prog 0x%06x v%d %s from %s (%s) -> %d", prog, vers,
+                     {6: "tcp", 17: "udp"}.get(prot, prot), peer, kind, port)
             return Packer().uint(port).bytes()
+        if call.proc == 5:                                   # CALLIT (broadcast search)
+            prog, vers, proc = a.uint(), a.uint(), a.uint()
+            a.opaque()
+            port = self.mappings.get((prog, vers, IPPROTO_TCP), 0)
+            log.info("portmapper: CALLIT prog 0x%06x v%d proc %d from %s (%s)%s", prog, vers,
+                     proc, peer, kind, f" -> {port}" if port and proc == 0 else " (no reply)")
+            if not port or proc != 0:
+                raise NoReply()                              # stay silent, per RFC 1833
+            # Our services are TCP-only; NULL has no results.
+            return Packer().uint(port).opaque(b"").bytes()
         if call.proc == 4:                                   # DUMP
+            log.info("portmapper: DUMP from %s (%s)", peer, kind)
             p = Packer()
             for (prog, vers, prot), port in sorted(self.mappings.items()):
                 p.bool(True).uint(prog).uint(vers).uint(prot).uint(port)

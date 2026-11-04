@@ -29,6 +29,8 @@ class BridgeConfig:
     max_recv_size: int = 4096
     log_level: str = "INFO"
     log_file: str = ""
+    mdns: bool = True                 # advertise as _vxi-11._tcp over mDNS
+    mdns_name: str = ""               # default: "enet100-bridge on <host name>"
     boxes: list[BoxConfig] = field(default_factory=list)
     aliases: dict[str, str] = field(default_factory=dict)
 
@@ -71,6 +73,7 @@ class Bridge:
         self.vxi = Vxi11Server(self.boxes, cfg.aliases, cfg.max_recv_size)
         self._servers: list[socketserver.BaseServer] = []
         self._registered: list[tuple[int, int, int, int]] = []
+        self._mdns = None
         self.stopped = threading.Event()
 
     def start(self) -> None:
@@ -91,6 +94,18 @@ class Bridge:
         mappings = [(DEVICE_CORE, VXI11_VERSION, rpc.IPPROTO_TCP, core_port),
                     (DEVICE_ASYNC, VXI11_VERSION, rpc.IPPROTO_TCP, abort_port)]
         self._start_portmapper(mappings)
+
+        if c.mdns and c.portmapper != "off":
+            from . import __version__
+            from .mdns import Advertiser, default_instance_name
+            self._mdns = Advertiser(c.mdns_name or default_instance_name(), 111, {
+                "txtvers": "1",
+                "Manufacturer": "enet100-bridge",
+                "Model": "GPIB-ENET/100 VXI-11 bridge",
+                "SerialNumber": socket.gethostname(),
+                "FirmwareVersion": __version__,
+            })
+            self._mdns.start()
 
         if c.admin_port:
             self._servers.append(self._serve_admin(c.admin_port))
@@ -199,6 +214,8 @@ class Bridge:
         if self.stopped.is_set():
             return
         log.info("shutting down")
+        if self._mdns:
+            self._mdns.stop()
         self.vxi.stop()
         for s in self._servers:
             try:
