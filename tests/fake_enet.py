@@ -60,6 +60,7 @@ class FakeEnet:
         self.wedged = False
         self.violations: list[str] = []
         self.ren = True
+        self.cic = False                         # becomes CIC on IFC, like the real box
         self.log: list[tuple[str, bytes]] = []
         self._lock = threading.RLock()
         self._bound: set[int] = set()            # client ports with a bound :5015
@@ -129,6 +130,7 @@ class FakeEnet:
         self._socks.clear()
         self._bound.clear()
         self.wedged = False
+        self.cic = False
 
     # -- :5000 ----------------------------------------------------------------------------------
 
@@ -222,12 +224,15 @@ class FakeEnet:
 
     def _board_cmd(self, cmd, args, data) -> bytes:
         if cmd == 0x1C:
+            self.cic = True
             return _status(0x0120)
         if cmd == 0x61:
             return _status(0x0138, 0, len(data))
         if cmd == 0x0D:
             return _status(0x0130, 0, 0, struct.pack("!H", 0x42FF | (0x1000 if self.ren else 0)))
         if cmd == 0x0F:
+            if not self.cic:
+                return _status(0x8100, 1)        # ECIC
             return _status(0x0130, 0, 0, struct.pack("!H", int(args[0] in self.instruments)))
         return _status(0x0130)
 

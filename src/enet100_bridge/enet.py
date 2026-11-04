@@ -36,7 +36,7 @@ IBERR_NAMES = {
     7: "ENEB", 8: "EDMA", 10: "EOIP", 11: "ECAP", 12: "EFSO", 14: "EBUS",
     15: "ESTB", 16: "ESRQ", 20: "ETAB",
 }
-ENOL, EABO = 2, 6
+ECIC, ENOL, EABO = 1, 2, 6
 
 # ibconfig option codes (NI-488.2 numbering; the box uses the same values)
 IBC_TMO = 0x03
@@ -338,6 +338,21 @@ class Enet100:
         """Is there a listener at this address? `sad` is 0 or 0x60..0x7E."""
         st = self._board_call(0x0F, bytes([pad, sad]), op="ibln")
         return struct.unpack("!H", st.extra[:2])[0] != 0
+
+    def find_listeners(self, addresses=range(1, 31)) -> list[int]:
+        """Primary addresses that answer as listeners (no data is sent to them).
+
+        Needs the box to be controller-in-charge. If it isn't (ECIC), send IFC
+        first, as NI's FindLstn does; IFC only resets the bus interface state.
+        """
+        try:
+            self.ibln(addresses[0] if addresses else 1)
+        except GpibError as e:
+            if e.iberr != ECIC:
+                raise
+            log.info("%s: not controller-in-charge; sending IFC", self.host)
+            self.ibsic()
+        return [pad for pad in addresses if self.ibln(pad)]
 
     def set_ren(self, on: bool) -> Status:
         return self._board_call(0x06, bytes([IBC_SRE, 1 if on else 0]), op="REN")

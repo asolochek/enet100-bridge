@@ -41,11 +41,12 @@ From an **elevated** PowerShell in the repository folder:
 powershell -ExecutionPolicy Bypass -File install\install-windows.ps1
 ```
 
-This installs the bridge into `C:\Program Files\enet100-bridge`. It finds your box
-by discovery (or takes `-EnetHost <ip>`) and writes
-`C:\ProgramData\enet100-bridge\config.toml`. It also opens the firewall ports
-and registers a scheduled task that starts the bridge at boot (as SYSTEM) and
-restarts it if it stops. Run it again to update. Other actions:
+This installs the bridge into `C:\Program Files\enet100-bridge` and opens the
+firewall ports. It then runs `enet100-bridge configure` (see
+[Configure](#configure)) to write `C:\ProgramData\enet100-bridge\config.toml`;
+`-EnetHost <ip>` skips the prompts. Finally it registers a scheduled task that
+starts the bridge at boot (as SYSTEM) and restarts it if it stops. Run it again
+to update; it offers to review the existing config. Other actions:
 
 ```powershell
 install\install-windows.ps1 -Action Status     # task state, connected box, log tail
@@ -60,7 +61,7 @@ sudo ./install/install-linux.sh            # or: --host 192.168.1.50
 sudo ./install/install-linux.sh --uninstall
 ```
 
-This installs into `/opt/enet100-bridge`, writes the config to
+This installs into `/opt/enet100-bridge`, runs `configure` to write
 `/etc/enet100-bridge/config.toml`, and sets up an `enet100-bridge.service` unit.
 If `rpcbind` already owns port 111, the bridge registers with it instead of
 running its own portmapper.
@@ -69,10 +70,43 @@ running its own portmapper.
 
 ```sh
 pip install .
-enet100-bridge discover                  # find boxes on the LAN
-cp config.example.toml enet100-bridge.toml   # set host = "<box ip>"
+enet100-bridge configure --config enet100-bridge.toml
 enet100-bridge run --config enet100-bridge.toml
 ```
+
+## Configure
+
+`enet100-bridge configure` sets the bridge up much like NI MAX's "add device":
+
+```
+Found on the network:
+  1. 192.168.1.50    00:80:2F:12:34:56  GPIB-ENET/100  fw C9   gpib-enet-lab  <- gpib0
+
+  a) add a box        r) remove   n) rename   h) change address
+  s) scan a bus       i) box network settings
+  f) search again     w) save and exit        q) exit without saving
+```
+
+- **Add**: pick a discovered box by number, or type an IP address or host
+  name. Discovery doesn't need to work; a box that doesn't answer can still be
+  added. Each box gets an interface name (`gpib0`, `gpib1`, ...).
+- **Scan**: lists the instruments that answer on a box's bus, with their VISA
+  resource names. If the bridge is running, the scan goes through it (the box
+  should have one client); otherwise configure opens a short session itself.
+- **Network settings**: shows what the box reports about itself (IP, netmask,
+  host name, MAC, firmware). Changing them isn't available yet: see
+  [docs/PROTOCOL.md](docs/PROTOCOL.md#changing-network-settings-not-decoded-yet)
+  for the capture that would make it possible.
+- Without a terminal: `enet100-bridge configure --add 192.168.1.50 [--name gpib1]`.
+
+With no `--config`, it edits the system config (`C:\ProgramData\enet100-bridge\config.toml`
+or `/etc/enet100-bridge/config.toml`). Restart the bridge afterwards.
+
+**If discovery finds nothing**: the box answers with a UDP broadcast, so a
+firewall rule that blocks Python drops it. On Windows, cancelling the
+"allow access" prompt creates a Block rule for that `python.exe`. The installer
+adds an Allow rule for its own copy and warns about Block rules. Broadcasts
+also don't cross routers, so a box on another subnet has to be added by address.
 
 ## Use
 

@@ -5,10 +5,11 @@
 .DESCRIPTION
   Install (the default):
     * creates a Python virtual environment in -InstallDir and installs the bridge into it
-    * writes C:\ProgramData\enet100-bridge\config.toml if there isn't one, finding the
-      GPIB-ENET/100 by discovery unless -EnetHost is given
     * adds Windows Firewall rules for the portmapper (111), the VXI-11 ports and
-      discovery replies
+      discovery replies (first, since discovery replies are broadcasts)
+    * runs `enet100-bridge configure`: finds GPIB-ENET/100 boxes by discovery, lets
+      you pick and name them (or enter an IP address), scans their buses, and writes
+      C:\ProgramData\enet100-bridge\config.toml. -EnetHost <ip> skips the prompts.
     * registers a scheduled task that runs the bridge as SYSTEM at boot and restarts
       it if it exits, then starts it
   Running it again updates the installed copy and keeps the config.
@@ -83,36 +84,40 @@ function Stop-Bridge {
 
 function Write-Config {
     New-Item -ItemType Directory -Force $ConfigDir | Out-Null
-    if (Test-Path $ConfigFile) {
-        Write-Host "Keeping existing config: $ConfigFile"
+    $log = (Join-Path $ConfigDir 'bridge.log') -replace '\\', '/'
+    if ($EnetHost) {
+        if (Test-Path $ConfigFile) {
+            Write-Host "Keeping existing config: $ConfigFile (run 'enet100-bridge configure' to change it)"
+            return
+        }
+        Invoke-Bridge @('configure', '--config', $ConfigFile, '--add', $EnetHost, '--log-file', $log)
         return
     }
-    $hostName = $EnetHost
-    if (-not $hostName) {
-        Write-Host 'Looking for GPIB-ENET boxes (UDP discovery)...'
-        $found = @(Invoke-Bridge @('discover') 2>$null | Where-Object { $_ -match 'GPIB-ENET/100' })
-        if ($found.Count -eq 1) {
-            $hostName = ($found[0] -split '\s+')[0]
-            Write-Host "Found: $($found[0])"
-        } elseif ($found.Count -gt 1) {
-            $found | ForEach-Object { Write-Host "  $_" }
-            $hostName = Read-Host 'More than one ENET/100 answered. IP address to use'
-        } else {
-            $hostName = Read-Host 'No ENET/100 answered discovery. Its IP address or host name'
-        }
+    if (Test-Path $ConfigFile) {
+        $ans = Read-Host "A config already exists ($ConfigFile). Review or change it now? (y/N)"
+        if ($ans -notmatch '^[yY]') { return }
     }
-    if (-not $hostName) { throw 'No ENET/100 address given.' }
-    $log = (Join-Path $ConfigDir 'bridge.log') -replace '\\', '/'
-    $text = Get-Content (Join-Path $RepoDir 'config.example.toml') -Raw
-    $text = $text -replace 'host = "192\.168\.1\.50"', "host = `"$hostName`""
-    $text = $text -replace 'log_file = ""', "log_file = `"$log`""
-    [IO.File]::WriteAllText($ConfigFile, $text, (New-Object Text.UTF8Encoding $false))
-    Write-Host "Wrote $ConfigFile (box: $hostName)"
+    # Interactive: discovery, pick list, naming, bus scan.
+    Invoke-Bridge @('configure', '--config', $ConfigFile, '--log-file', $log)
+    if (-not (Test-Path $ConfigFile)) {
+        throw "No config was saved. Run the installer again, or pass -EnetHost <ip>."
+    }
+}
+
+function Test-BlockRules {
+    # A Block rule on the bridge's python.exe (e.g. from cancelling the firewall prompt)
+    # silently drops discovery replies and VXI-11 connections.
+    $blocks = Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+        Where-Object { $_.Program -and ($_.Program -ieq $VenvPy) } |
+        Get-NetFirewallRule | Where-Object { $_.Action -eq 'Block' -and $_.Enabled -eq 'True' }
+    foreach ($r in $blocks) {
+        Write-Warning "Firewall rule '$($r.DisplayName)' blocks $VenvPy. Discovery and clients won't work until it is removed or set to Allow."
+    }
 }
 
 function Set-Firewall {
     Get-NetFirewallRule -Group $RuleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    $cfg = Get-Content $ConfigFile -Raw
+    $cfg = if (Test-Path $ConfigFile) { Get-Content $ConfigFile -Raw } else { '' }
     $core = if ($cfg -match '(?m)^\s*core_port\s*=\s*(\d+)') { $Matches[1] } else { '9010' }
     $abort = if ($cfg -match '(?m)^\s*abort_port\s*=\s*(\d+)') { $Matches[1] } else { '9011' }
     $common = @{ Group = $RuleGroup; Direction = 'Inbound'; Action = 'Allow'; Profile = 'Any' }
@@ -121,7 +126,7 @@ function Set-Firewall {
     New-NetFirewallRule @common -DisplayName 'enet100-bridge VXI-11' -Protocol TCP -LocalPort $core, $abort | Out-Null
     # Discovery answers arrive as UDP broadcasts to an ephemeral port.
     New-NetFirewallRule @common -DisplayName 'enet100-bridge discovery replies' -Protocol UDP -RemotePort 44515 -Program $VenvPy | Out-Null
-    Write-Host "Firewall: allowed TCP/UDP 111, TCP $core,$abort, UDP from :44515"
+    Write-Verbose "Firewall: allowed TCP/UDP 111, TCP $core,$abort, UDP from :44515"
 }
 
 function Register-Task {
@@ -191,8 +196,11 @@ if ($LASTEXITCODE -ne 0) { throw 'pip install failed.' }
 Write-Host "Installed into $Venv"
 
 Test-Port111
-Write-Config
+# Firewall first: discovery replies are broadcasts and are dropped without a rule.
 Set-Firewall
+Test-BlockRules
+Write-Config
+Set-Firewall          # again, in case configure changed the ports
 Register-Task
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3

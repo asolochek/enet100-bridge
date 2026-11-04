@@ -69,11 +69,16 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_configure(args) -> int:
+    from .configure import main as configure_main
+    return configure_main(args.config, args.add, args.name, args.log_file)
+
+
 def cmd_discover(args) -> int:
-    from .discovery import discover
+    from .discovery import NO_REPLY_HINT, discover
     boxes = discover(timeout=args.timeout)
     if not boxes:
-        print("no GPIB-ENET boxes answered")
+        print(NO_REPLY_HINT, file=sys.stderr)
         return 1
     for b in boxes:
         print(b)
@@ -136,8 +141,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--log-level")
     p.set_defaults(fn=cmd_run)
 
+    p = sub.add_parser("configure", help="find boxes, pick and name them, scan their buses, "
+                                         "and write the config")
+    p.add_argument("-c", "--config", help="config file (default: the system location)")
+    p.add_argument("--add", metavar="HOST", help="add this box without prompting")
+    p.add_argument("--name", help="interface name for --add (default: next free gpibN)")
+    p.add_argument("--log-file", help="log_file to set when creating a new config")
+    p.set_defaults(fn=cmd_configure)
+
     p = sub.add_parser("discover", help="list GPIB-ENET boxes on the LAN (UDP broadcast)")
-    p.add_argument("--timeout", type=float, default=3.0)
+    p.add_argument("--timeout", type=float, default=12.0)
     p.set_defaults(fn=cmd_discover)
 
     for name, fn, hlp in (("status", cmd_status, "show the running bridge's state"),

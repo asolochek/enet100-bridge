@@ -15,6 +15,9 @@ from .enet import (MODE_BIN, MODE_EOT, Device, Enet100, EnetError, EnetTimeout, 
 log = logging.getLogger(__name__)
 
 
+PROBE_INTERVAL_S = 15.0
+
+
 class BoxUnavailable(Exception):
     """The box can't be used right now (absent, booting, or wedged)."""
 
@@ -47,6 +50,7 @@ class Box:
         self.last_recovery: float | None = None
         self.last_activity = time.monotonic()
         self.info: discovery.BoxInfo | None = None
+        self._last_probe: float | None = None
         self._stop = threading.Event()
         self._monitor: threading.Thread | None = None
 
@@ -75,6 +79,10 @@ class Box:
     def _probe_presence(self) -> bool:
         if not self.cfg.use_discovery:
             return True
+        # Don't query more often than the box can answer (see discovery.BUSY_WINDOW_S).
+        if self._last_probe and time.monotonic() - self._last_probe < PROBE_INTERVAL_S:
+            return self.info is not None
+        self._last_probe = time.monotonic()
         info = discovery.is_present(self.cfg.host)
         if info is None:
             if self.last_absent is None or self.info is not None:

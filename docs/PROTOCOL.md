@@ -147,7 +147,12 @@ UDP to `255.255.255.255:44515` (or the box's address), 184 bytes:
 ```
 
 Each box answers with a broadcast from :44515 to the query's source port. The
-ENET/100 sends its answer 4 times, ~2 s apart. The 184-byte answer:
+ENET/100 sends its answer 5 times, 1.9 s apart (0, 1.9, 3.8, 5.8, 7.7 s)
+**(live)**. For about 10 s after a query, it **ignores any new query**, from
+any host **(live)**. A client must listen for longer than that, or send its
+query again after ~10.5 s. Because the answer is a broadcast, a host firewall
+that blocks inbound UDP for the client program drops it silently. The 184-byte
+answer:
 
 | offset | content |
 |--------|---------|
@@ -159,13 +164,42 @@ ENET/100 sends its answer 4 times, ~2 s apart. The 184-byte answer:
 | 0E | MAC address |
 | 1C | model, 32 bytes NUL padded ("GPIB-ENET/100") |
 | 3C | host name, NUL padded |
-| 9C | `02 00` (? IP mode; the box was on DHCP) |
+| 9C | u16, unknown: `02 00` in one capture and `00 00` later, both with the box on DHCP |
 | 9E | IP address |
 | A2 | netmask |
 | A6 | 4 bytes, zero |
 | AA | 4 bytes: the LAN's DNS server here (? gateway or DNS) |
 | B6 | "NI" |
 
-NI MAX also sent a box's record back to it with the same `08 01` opcode, and
-nothing visible happened. That is probably a settings write. Don't send
-modified records: a wrong address or netmask could take the box off the network.
+## Changing network settings (not decoded yet)
+
+While adding a box, NI MAX sent the box's own record back to it, opcode
+`08 01`, by UDP to :44515 and over TCP :44516 (`00 00 00 b8` + record). Every
+record MAX sent was byte-for-byte what the box had just reported, so nothing
+changed. That is probably the settings write, but it hasn't been seen with a
+changed value. We don't know whether the box applies it, needs a reboot, checks
+some fields, or wants a password. Don't send modified records: a wrong address
+or netmask could take the box off the network.
+
+To decode it, capture a real change on a PC with NI-488.2 17.6 (the last
+version that supports the ENET/100):
+
+1. Start Wireshark on the interface that reaches the box with the capture
+   filter `udp port 44515 or tcp port 44516 or host <box ip>`.
+2. In NI MAX, open the box under *Devices and Interfaces* and change **one**
+   harmless setting, ideally the host name (e.g. add `-2`), then apply it.
+   If MAX offers no way to edit it, try NI's older *GPIB-ENET/100
+   Configuration Utility*. NI-488.2 17.6's *Ethernet Device Configuration*
+   only uses mDNS and can't see an ENET/100.
+3. Note whether the box rebooted (it drops off the network for ~15 s).
+4. Change the setting back the same way, still capturing.
+5. Run `enet100-bridge discover` and save its output to confirm the result.
+
+Two writes that differ only in the host name show which bytes carry it and
+whether anything else, such as a checksum or a commit flag, changes with it.
+
+## Bus scans
+
+`ibln` (0x0F) on the board session fails with `8100` / iberr 1 (ECIC) until
+the box is controller-in-charge **(live)**. Sending IFC (0x1C) first makes it
+CIC, which is what NI's FindLstn does too.

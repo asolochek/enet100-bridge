@@ -139,6 +139,8 @@ class Bridge:
                 line = self.rfile.readline(200).decode("ascii", "replace").strip()
                 if line == "status":
                     reply = bridge.status()
+                elif line.startswith("scan "):
+                    reply = bridge.scan(line[5:].strip())
                 elif line == "shutdown":
                     reply = {"ok": True}
                     threading.Thread(target=bridge.stop, daemon=True).start()
@@ -159,6 +161,23 @@ class Bridge:
                       for l in list(self.vxi.links.values())],
         }
 
+    def scan(self, name: str) -> dict:
+        """List listeners on a box's bus, using the bridge's own session."""
+        from .box import BoxUnavailable
+        from .enet import EnetError, GpibError
+        box = next((b for n, b in self.boxes.items() if n.lower() == name.lower()), None)
+        if box is None:
+            return {"error": f"no box named {name!r}"}
+        try:
+            with box.lock:
+                box.ensure_open()
+                return {"box": box.name, "listeners": box.enet.find_listeners()}
+        except EnetError as e:
+            box.note_session_lost(e)
+            return {"error": str(e)}
+        except (BoxUnavailable, GpibError) as e:
+            return {"error": str(e)}
+
     def stop(self) -> None:
         if self.stopped.is_set():
             return
@@ -177,7 +196,7 @@ class Bridge:
         self.stopped.set()
 
 
-def admin_request(cmd: str, port: int = 9012, timeout: float = 5.0) -> dict:
+def admin_request(cmd: str, port: int = 9012, timeout: float = 15.0) -> dict:
     with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
         s.sendall(cmd.encode() + b"\n")
         f = s.makefile("rb")

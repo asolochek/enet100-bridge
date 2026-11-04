@@ -51,25 +51,24 @@ systemctl stop enet100-bridge.service 2>/dev/null || true
 echo "installed into $PREFIX/venv"
 
 mkdir -p "$CONFDIR"
-if [ ! -f "$CONFDIR/config.toml" ]; then
-    if [ -z "$HOST" ]; then
-        echo "looking for GPIB-ENET boxes..."
-        FOUND=$("$PREFIX/venv/bin/enet100-bridge" discover 2>/dev/null | grep 'GPIB-ENET/100' || true)
-        if [ "$(printf '%s\n' "$FOUND" | grep -c .)" -eq 1 ]; then
-            HOST=$(printf '%s\n' "$FOUND" | awk '{print $1}')
-            echo "found: $FOUND"
-        else
-            [ -n "$FOUND" ] && printf '%s\n' "$FOUND"
-            printf 'ENET/100 IP address or host name: '
-            read -r HOST
-        fi
+CONF="$CONFDIR/config.toml"
+BRIDGE="$PREFIX/venv/bin/enet100-bridge"
+if [ -n "$HOST" ]; then
+    if [ -f "$CONF" ]; then
+        echo "keeping existing $CONF (run '$BRIDGE configure' to change it)"
+    else
+        "$BRIDGE" configure --config "$CONF" --add "$HOST"
     fi
-    [ -n "$HOST" ] || { echo "no address given" >&2; exit 1; }
-    sed -e "s/^host = \"192\.168\.1\.50\"/host = \"$HOST\"/" "$REPO/config.example.toml" \
-        > "$CONFDIR/config.toml"
-    echo "wrote $CONFDIR/config.toml (box: $HOST)"
 else
-    echo "keeping existing $CONFDIR/config.toml"
+    RUN=1
+    if [ -f "$CONF" ]; then
+        printf 'A config already exists (%s). Review or change it now? (y/N): ' "$CONF"
+        read -r ANS
+        case "$ANS" in [yY]*) ;; *) RUN=0 ;; esac
+    fi
+    # Interactive: discovery, pick list, naming, bus scan.
+    [ "$RUN" -eq 1 ] && { "$BRIDGE" configure --config "$CONF" || true; }
+    [ -f "$CONF" ] || { echo "no config was saved; rerun, or pass --host <ip>" >&2; exit 1; }
 fi
 
 cat > "$UNIT" <<EOF
