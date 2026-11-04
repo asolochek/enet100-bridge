@@ -1,0 +1,11 @@
+__pycache__/
+*.py[oc]
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+# local configs and logs (may contain your LAN addresses)
+enet100-bridge.toml
+*.log
+*.pcapng

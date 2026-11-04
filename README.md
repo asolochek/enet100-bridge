@@ -1,0 +1,166 @@
+# enet100-bridge
+
+A small VXI-11 server that makes a **National Instruments GPIB-ENET/100** usable
+from modern VISA libraries: Keysight IO Libraries, NI-VISA, PyVISA (with either
+backend or pyvisa-py), and anything built on them.
+
+NI dropped GPIB-ENET/100 support after NI-488.2 17.6 and the box's firmware
+(REV C.9) is final. The bridge speaks the box's own protocol on one side and
+standard VXI-11 on the other, so instruments on its GPIB bus appear as ordinary
+LAN instruments:
+
+```
+TCPIP::<bridge host>::gpib0,<address>::INSTR
+```
+
+```
+ VISA app ──VXI-11──▶ enet100-bridge ──NI ENET protocol──▶ GPIB-ENET/100 ──GPIB──▶ instruments
+ (any host)           (Windows/Linux/Pi)  TCP 5000/5015
+```
+
+No dependencies beyond Python 3.11+. The bridge doesn't need NI-488.2 or NI-VISA.
+
+## Status
+
+Tested against a GPIB-ENET/100 (firmware REV C.9) and an HP 3457A, from
+Keysight VISA through PyVISA on Windows 11: identify, reads with LF termination,
+150-reading bursts, device clear, serial poll, SRQ events, REN/GTL, writes and
+reads to empty addresses, clean shutdown and reconnect.
+
+Not supported: the GPIB-ENET/1000 (it uses a different handshake), ATN and
+pass-control `docmd`s, and interrupting a call in progress (`device_abort` is
+accepted but the call ends at its own timeout).
+
+## Install
+
+### Windows
+
+From an **elevated** PowerShell in the repository folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install\install-windows.ps1
+```
+
+This installs the bridge into `C:\Program Files\enet100-bridge`. It finds your box
+by discovery (or takes `-EnetHost <ip>`) and writes
+`C:\ProgramData\enet100-bridge\config.toml`. It also opens the firewall ports
+and registers a scheduled task that starts the bridge at boot (as SYSTEM) and
+restarts it if it stops. Run it again to update. Other actions:
+
+```powershell
+install\install-windows.ps1 -Action Status     # task state, connected box, log tail
+install\install-windows.ps1 -Action Restart
+install\install-windows.ps1 -Action Uninstall  # add -Purge to delete the config too
+```
+
+### Linux (systemd)
+
+```sh
+sudo ./install/install-linux.sh            # or: --host 192.168.1.50
+sudo ./install/install-linux.sh --uninstall
+```
+
+This installs into `/opt/enet100-bridge`, writes the config to
+`/etc/enet100-bridge/config.toml`, and sets up an `enet100-bridge.service` unit.
+If `rpcbind` already owns port 111, the bridge registers with it instead of
+running its own portmapper.
+
+### By hand
+
+```sh
+pip install .
+enet100-bridge discover                  # find boxes on the LAN
+cp config.example.toml enet100-bridge.toml   # set host = "<box ip>"
+enet100-bridge run --config enet100-bridge.toml
+```
+
+## Use
+
+```python
+import pyvisa
+rm = pyvisa.ResourceManager()
+dmm = rm.open_resource("TCPIP::bridge-host::gpib0,22::INSTR")
+dmm.read_termination = "\n"
+print(dmm.query("*IDN?"))
+```
+
+- **Keysight Connection Expert**: add a LAN instrument by host name, choose
+  *VXI-11*, and set the remote device name to `gpib0,22`.
+- **NI MAX**: *Create New → VISA TCP/IP Resource → Manual entry of LAN
+  instrument*, with the bridge's host name and LAN device name `gpib0,22`.
+- Secondary addresses: `gpib0,22,3`. The bus itself: `TCPIP::host::gpib0::INTFC`
+  (IFC, REN, ATN command bytes via `viGpibCommand`, bus status).
+- Several boxes: add more `[[box]]` sections named `gpib1`, `gpib2`, ...
+
+Quick checks from the bridge host:
+
+```sh
+enet100-bridge query gpib0,22 "*IDN?"
+enet100-bridge status
+```
+
+### Instruments that don't send EOI
+
+Many older instruments (the HP 3457A, for example) don't assert EOI at the end
+of a reply. Set the read termination character (`read_termination = "\n"` in
+PyVISA, or `VI_ATTR_TERMCHAR_EN`) so reads end at the LF. Otherwise every read
+ends with a timeout.
+
+## The box's rules (and what the bridge does about them)
+
+The GPIB-ENET/100 is fragile in ways that will cost you a power cycle:
+
+1. **It ignores the first ~45–60 s after power-on.** TCP comes up at ~13 s,
+   but a session opened before the firmware is ready leaves the box deaf until
+   it is power-cycled. The bridge watches the box with NI's UDP discovery query,
+   which is harmless. When the box reappears after being gone, the bridge waits
+   `boot_settle_s` (60 s) before connecting.
+2. **Never close a half-set-up session.** Closing a connection after only the
+   first command wedges the box. The bridge never closes a session that didn't
+   finish its setup, and closes complete ones cleanly (devices offline first).
+3. **One client at a time is the safe assumption.** Two hosts using the box at
+   once hasn't been tested. Point everything at the bridge instead of giving
+   each host its own NI driver.
+
+If the box wedges anyway (it accepts connections but never answers), set
+`recovery_command` in the config to something that power-cycles it, e.g. a
+smart plug. The example config shows a Home Assistant version.
+
+Stop the bridge with `enet100-bridge stop`, SIGTERM, Ctrl+C, or
+`install-windows.ps1 -Action Stop`. Each of these closes the sessions cleanly.
+Killing the process outright is less polite to the box.
+
+## How it works
+
+- `src/enet100_bridge/enet.py`: the GPIB-ENET/100 protocol client (board
+  session, device handles, I/O, ibconfig, serial poll, ibwait).
+- `discovery.py`: NI's UDP discovery on port 44515.
+- `rpc.py`: ONC RPC/XDR, record marking, and a portmapper.
+- `vxi11.py`: the VXI-11 core, abort and interrupt channels.
+- `box.py`: connection management, reconnects, recovery.
+- `docs/PROTOCOL.md`: the GPIB-ENET/100 wire protocol, as far as it is known.
+
+Every VXI-11 link to the same address shares one GPIB-ENET device handle. The
+handle is opened on first use and kept open. SRQ is watched on the handle's
+`:5015` channel only while a client has it enabled.
+
+## Development
+
+```sh
+uv sync
+uv run pytest
+```
+
+The tests run against `tests/fake_enet.py`, a simulated box that enforces the
+same wedge rule as the real one, so a change that would brick real hardware
+fails a test.
+
+## Credits
+
+The protocol was decoded from packet captures of NI-488.2 17.6. ESRF's BLISS
+project (`bliss/comm/gpib/libnienet.py`, originally "test-enet" by Robert
+Jordens, 2005) was the starting reference. This is an independent
+implementation and contains none of its code.
+
+GPIB-ENET, NI-488.2, NI-VISA and NI MAX are trademarks of National Instruments.
+This project is not affiliated with NI or Keysight.

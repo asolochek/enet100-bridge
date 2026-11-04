@@ -1,0 +1,51 @@
+# enet100-bridge configuration.
+#
+# Windows: C:\ProgramData\enet100-bridge\config.toml
+# Linux:   /etc/enet100-bridge/config.toml
+# or pass --config / set ENET100_BRIDGE_CONFIG.
+
+[bridge]
+listen = "0.0.0.0"        # address the VXI-11 server listens on
+core_port = 9010          # VXI-11 core channel (clients find it via the portmapper)
+abort_port = 9011         # VXI-11 abort channel
+# Port 111 portmapper:
+#   "auto"    serve it ourselves, or register with rpcbind if it already owns 111
+#   "builtin" always serve it ourselves (fail if 111 is taken)
+#   "rpcbind" always register with the system rpcbind (Linux)
+#   "off"     don't; clients must be configured with core_port directly
+portmapper = "auto"
+admin_port = 9012         # localhost-only status/stop port; 0 disables it
+max_recv_size = 4096      # largest write chunk clients may send in one call
+log_level = "INFO"
+log_file = ""             # e.g. "C:/ProgramData/enet100-bridge/bridge.log"
+
+# One [[box]] per GPIB-ENET/100. `name` is the interface name clients use:
+#   TCPIP::<bridge host>::gpib0,4::INSTR    -> instrument at primary address 4
+#   TCPIP::<bridge host>::gpib0,4,2::INSTR  -> secondary address 2
+#   TCPIP::<bridge host>::gpib0::INTFC      -> the bus itself (IFC, REN, ATN commands)
+[[box]]
+name = "gpib0"
+host = "192.168.1.50"     # the box's IP or DNS name; `enet100-bridge discover` finds it
+
+# The box ignores everything for ~45-60 s after power-on, and talking to it too
+# early wedges it. Once it has been seen missing (by discovery), the bridge
+# waits this long after it reappears before connecting.
+boot_settle_s = 60
+connect_on_start = true   # open the board session at startup, not on first use
+use_discovery = true      # check the box with a UDP discovery query before connecting
+retry_interval_s = 15
+
+# Set eos_8bit = true to compare the read termination character on all 8 bits.
+# Off by default: with it on, the box dropped the trailing LF in a VISA capture.
+eos_8bit = false
+
+# Optional: a shell command that power-cycles the box. The bridge runs it when
+# the box accepts connections but stops answering (wedged), at most once per
+# recovery_cooldown_s. Example for a Home Assistant smart plug:
+#   recovery_command = 'curl -s -X POST -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -d "{\"entity_id\":\"switch.enet100\"}" http://homeassistant.local:8123/api/services/switch/turn_off && sleep 10 && curl -s -X POST -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -d "{\"entity_id\":\"switch.enet100\"}" http://homeassistant.local:8123/api/services/switch/turn_on'
+recovery_command = ""
+recovery_cooldown_s = 300
+
+# Optional extra device names, e.g. so a client can open TCPIP::host::dmm::INSTR
+[aliases]
+# dmm = "gpib0,4"
