@@ -59,8 +59,12 @@ class FakeEnet:
         self.instruments: dict[int, FakeInstrument] = {4: FakeInstrument()}
         self.wedged = False
         self.violations: list[str] = []
-        self.ren = True
+        self.ren = False
         self.cic = False                         # becomes CIC on IFC, like the real box
+        # Board options as a real box reported them (NI-488.2 IbcXXX codes).
+        self.board_opts = {0x01: 0, 0x02: 0, 0x03: 13, 0x07: 1, 0x08: 0, 0x0A: 1, 0x0B: 0,
+                           0x10: 0, 0x11: 2, 0x17: 0, 0x19: 0, 0x1A: 1, 0x1F: 0, 0x20: 0,
+                           0x21: 0}
         self.log: list[tuple[str, bytes]] = []
         self._lock = threading.RLock()
         self._bound: set[int] = set()            # client ports with a bound :5015
@@ -200,7 +204,11 @@ class FakeEnet:
         if cmd == 0x06:
             return self._ibconfig(st, args[0], args[1])
         if cmd == 0x4E:
-            return _status(0x0130 if st["kind"] == "board" else 0x0100)
+            if st["kind"] == "board":
+                if args[0] not in self.board_opts:
+                    return _status(0x8130, 4)    # EARG
+                return _status(0x0130, self.board_opts[args[0]])
+            return _status(0x0100)
         if st["kind"] == "board":
             return self._board_cmd(cmd, args, data)
         return self._dev_cmd(st, cmd, args, data, c)
@@ -209,8 +217,12 @@ class FakeEnet:
         d = st["dev"]
         prev = 0
         if d is None:
+            if opt not in self.board_opts:
+                return _status(0x8130, 4)        # EARG
+            prev = self.board_opts[opt]
+            self.board_opts[opt] = val
             if opt == 0x0B:
-                prev, self.ren = int(self.ren), bool(val)
+                self.ren = bool(val)
             return _status(0x0130, prev)
         if opt == 0x03:
             prev, d["tmo"] = d["tmo"], val

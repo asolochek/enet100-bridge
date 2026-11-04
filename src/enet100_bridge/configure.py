@@ -98,6 +98,36 @@ def scan_bus(cfg: BridgeConfig, box: BoxConfig) -> tuple[list[int] | None, str]:
             pass
 
 
+def read_gpib(cfg: BridgeConfig, box: BoxConfig) -> tuple[dict | None, str]:
+    """The box's current GPIB settings (ibask), through the running bridge if
+    there is one, else with a short direct session."""
+    if cfg.admin_port:
+        try:
+            r = admin_request(f"gpib {box.name}", cfg.admin_port, timeout=30)
+            if "settings" in r:
+                return r["settings"], "via the running bridge"
+            if "no box named" not in r.get("error", ""):
+                return None, f"the running bridge says: {r.get('error')}"
+        except OSError:
+            pass
+    from .enet import Enet100, EnetError, GpibError
+    from .gpib_settings import SETTINGS
+    e = Enet100(box.host, cmd_port=box.cmd_port, wait_port=box.wait_port)
+    try:
+        e.open()
+    except (EnetError, OSError) as ex:
+        return None, f"couldn't open a session: {ex}"
+    try:
+        return {s.key: s.decode(e.ask(s.opt)) for s in SETTINGS}, "directly"
+    except (EnetError, GpibError) as ex:
+        return None, f"read failed: {ex}"
+    finally:
+        try:
+            e.close()
+        except Exception:
+            pass
+
+
 # -- interactive UI ---------------------------------------------------------------------------
 
 class Ui:
@@ -279,6 +309,76 @@ class Configurator:
         for pad in listeners:
             self.ui.print(f"    address {pad:<3} TCPIP::<bridge host>::{b.name},{pad}::INSTR")
 
+    def gpib(self, b: BoxConfig | None = None) -> None:
+        """Edit a box's GPIB settings, like NI MAX's GPIB settings page."""
+        from .gpib_settings import SETTINGS
+        b = b or self._pick_box()
+        if not b:
+            return
+        ui = self.ui
+        live: dict | None = None
+        extra = [("ifc_on_connect", "IFC on connect", "pulse IFC after connecting so the box "
+                  "is controller-in-charge at once")]
+        while True:
+            ui.print("")
+            ui.print(f"GPIB settings for {b.name} (sent to the box each time the bridge connects):")
+            head = f"      {'setting':<27} {'configured':<11}"
+            ui.print(head + (" on the box now" if live else ""))
+            for n, s in enumerate(SETTINGS, 1):
+                v = getattr(b, s.key)
+                row = f"  {n:>2}. {s.label:<27} {s.fmt(v):<11}"
+                if live and s.key in live:
+                    lv = live[s.key]
+                    row += f" {s.fmt(lv)}" + ("" if lv == v else "   <- differs")
+                ui.print(row)
+            n0 = len(SETTINGS)
+            for i, (key, label, _) in enumerate(extra, n0 + 1):
+                ui.print(f"  {i:>2}. {label:<27} {'yes' if getattr(b, key) else 'no':<11}")
+            ui.print("  Number to change, l) read the box's current values, Enter) done")
+            c = ui.ask("GPIB setting").lower()
+            if not c:
+                return
+            if c == "l":
+                ui.print("  Reading from the box...")
+                live, how = read_gpib(self.cfg, b)
+                if live is None:
+                    ui.print(f"  Couldn't read them: {how}")
+                else:
+                    ui.print(f"  Read {how}.")
+                continue
+            if not c.isdigit() or not 1 <= int(c) <= n0 + len(extra):
+                ui.print("  Pick a number from the list.")
+                continue
+            i = int(c)
+            if i > n0:
+                key, label, hlp = extra[i - n0 - 1]
+                ui.print(f"  {label}: {hlp}")
+                v = ui.yes(label, default=getattr(b, key))
+                if v != getattr(b, key):
+                    setattr(b, key, v)
+                    self.dirty = True
+                continue
+            s = SETTINGS[i - 1]
+            cur = getattr(b, s.key)
+            ui.print(f"  {s.label}: {s.help}.")
+            if s.kind == "choice":
+                ui.print("  Choices: " + ", ".join(s.fmt(c) for c in s.choices))
+            try:
+                v = s.parse(ui.ask(f"  {s.label}", s.fmt(cur)))
+            except ValueError as e:
+                ui.print(f"  Not changed: {e}.")
+                continue
+            if s.key == "gpib_address" and v != cur:
+                ui.print("  Make sure no instrument on this bus uses that address.")
+            if s.key == "autopoll" and not v:
+                ui.print("  Note: SRQ events to VISA clients rely on automatic serial polling.")
+            if s.key == "system_controller" and not v:
+                ui.print("  Note: without it the box can't send IFC or REN; only turn it off if "
+                         "another controller on the bus is system controller.")
+            if v != cur:
+                setattr(b, s.key, v)
+                self.dirty = True
+
     def network_settings(self) -> None:
         b = self._pick_box()
         if not b:
@@ -320,7 +420,7 @@ class Configurator:
         while True:
             self.show()
             ui.print("  a) add a box        r) remove   n) rename   h) change address")
-            ui.print("  s) scan a bus       i) box network settings")
+            ui.print("  s) scan a bus       g) GPIB settings        i) box network settings")
             ui.print("  f) search again     w) save and exit        q) exit without saving")
             c = ui.ask("Choice", "w" if self.dirty else "q").lower()[:1]
             if c == "a":
@@ -333,6 +433,8 @@ class Configurator:
                 self.change_host()
             elif c == "s":
                 self.scan()
+            elif c == "g":
+                self.gpib()
             elif c == "i":
                 self.network_settings()
             elif c == "f":

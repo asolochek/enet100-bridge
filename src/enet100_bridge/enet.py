@@ -36,13 +36,19 @@ IBERR_NAMES = {
     7: "ENEB", 8: "EDMA", 10: "EOIP", 11: "ECAP", 12: "EFSO", 14: "EBUS",
     15: "ESTB", 16: "ESRQ", 20: "ETAB",
 }
-ECIC, ENOL, EABO = 1, 2, 6
+ECIC, ENOL, EARG, EABO = 1, 2, 4, 6
 
 # ibconfig option codes (NI-488.2 numbering; the box uses the same values)
+IBC_PAD = 0x01
+IBC_SAD = 0x02
 IBC_TMO = 0x03
 IBC_EOT = 0x04
 IBC_READDR = 0x06
-IBC_SRE = 0x0B          # board: REN line
+IBC_AUTOPOLL = 0x07     # board: automatic serial polling
+IBC_CICPROT = 0x08      # board: CIC protocol
+IBC_SC = 0x0A           # board: system controller
+IBC_SRE = 0x0B          # board: REN line / assert REN when system controller
+IBC_TIMING = 0x11       # board: T1 delay, 1 = 2 us, 2 = 500 ns, 3 = 350 ns
 IBC_EOSRD = 0x0C
 IBC_EOSWRT = 0x0D
 IBC_EOSCMP = 0x0E
@@ -322,9 +328,29 @@ class Enet100:
 
     # -- board-level GPIB operations ------------------------------------------
 
+    def ask(self, opt: int) -> int:
+        """Board ibask: the current value of an option."""
+        return self._board_call(0x4E, bytes([opt]), op=f"ibask 0x{opt:02x}").err
+
+    def config(self, opt: int, val: int) -> int:
+        """Board ibconfig. Returns the previous value."""
+        return self._board_call(0x06, bytes([opt, val & 0xFF]), op=f"ibconfig 0x{opt:02x}").err
+
+    def _as_cic(self, fn):
+        """Run a board call that needs controller-in-charge. If the box isn't CIC
+        (ECIC), send IFC to take control, as NI's driver does, and retry once."""
+        try:
+            return fn()
+        except GpibError as e:
+            if e.iberr != ECIC:
+                raise
+            log.info("%s: not controller-in-charge; sending IFC", self.host)
+            self.ibsic()
+            return fn()
+
     def ibcmd(self, data: bytes) -> Status:
         """Send bytes with ATN asserted (multiline interface messages)."""
-        return self._board_call(0x61, data=data, op="ibcmd")
+        return self._as_cic(lambda: self._board_call(0x61, data=data, op="ibcmd"))
 
     def ibsic(self) -> Status:
         """Pulse IFC."""
@@ -345,13 +371,9 @@ class Enet100:
         Needs the box to be controller-in-charge. If it isn't (ECIC), send IFC
         first, as NI's FindLstn does; IFC only resets the bus interface state.
         """
-        try:
-            self.ibln(addresses[0] if addresses else 1)
-        except GpibError as e:
-            if e.iberr != ECIC:
-                raise
-            log.info("%s: not controller-in-charge; sending IFC", self.host)
-            self.ibsic()
+        addresses = list(addresses)
+        if addresses:
+            self._as_cic(lambda: self.ibln(addresses[0]))
         return [pad for pad in addresses if self.ibln(pad)]
 
     def set_ren(self, on: bool) -> Status:

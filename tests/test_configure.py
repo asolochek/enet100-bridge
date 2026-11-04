@@ -137,3 +137,50 @@ def test_discover_resends_after_busy_window(monkeypatch):
                                want_ip="127.0.0.1")
     srv.close()
     assert len(seen) == 2 and [f.model for f in found] == ["GPIB-ENET/100"]
+
+
+def test_gpib_setting_parse_and_format():
+    from enet100_bridge.gpib_settings import BY_KEY
+    t = BY_KEY["bus_timing_ns"]
+    assert t.parse("2us") == 2000 and t.parse("350 ns") == 350 and t.fmt(2000) == "2 us"
+    with pytest.raises(ValueError):
+        t.parse("100")
+    sad = BY_KEY["gpib_secondary"]
+    assert sad.parse("none") == -1 and sad.encode(-1) == 0 and sad.encode(5) == 0x65
+    assert sad.decode(0x65) == 5 and sad.decode(0) == -1
+    tmo = BY_KEY["board_timeout_s"]
+    assert tmo.parse("3") == 3 and tmo.encode(3) == 12 and tmo.decode(13) == 10.0
+    assert tmo.parse("300ms") == 0.3
+    assert BY_KEY["hs488_cable_m"].parse("off") == 0
+    with pytest.raises(ValueError):
+        BY_KEY["gpib_address"].parse("31")
+
+
+def test_bridge_applies_gpib_settings_on_connect(fake):
+    from enet100_bridge.box import Box
+    box = Box(BoxConfig(name="gpib0", host="127.0.0.1", cmd_port=fake.cmd_port,
+                        wait_port=fake.wait_port, use_discovery=False, boot_settle_s=0,
+                        gpib_address=2, bus_timing_ns=2000, board_timeout_s=3,
+                        ifc_on_connect=True))
+    box.ensure_open()
+    o = fake.board_opts
+    assert (o[0x01], o[0x11], o[0x03], o[0x0B]) == (2, 1, 12, 1)   # PAD, T1, TMO, REN on
+    assert fake.cic                                                 # IFC sent
+    assert box.read_gpib_settings()["gpib_address"] == 2
+    box.stop()
+    assert fake.violations == []
+
+
+def test_configure_gpib_screen(tmp_path, monkeypatch, fake):
+    monkeypatch.setattr(discovery, "discover", lambda *a, **k: [])
+    cfg = BridgeConfig(admin_port=0)
+    cfg.boxes.append(BoxConfig(name="gpib0", host="127.0.0.1", cmd_port=fake.cmd_port,
+                               wait_port=fake.wait_port))
+    # g -> l (read live) -> 7 (timing) "2us" -> 1 (address) "31" (rejected) -> done -> save
+    ui, out = scripted(["g", "l", "7", "2us", "1", "31", "", "w"])
+    p = tmp_path / "c.toml"
+    assert Configurator(cfg, p, ui).run()
+    assert load_config(p).boxes[0].bus_timing_ns == 2000
+    assert any("Read directly" in l for l in out)
+    assert any("Assert REN when SC" in l and "<- differs" in l for l in out)
+    assert any("must be 0..30" in l for l in out)

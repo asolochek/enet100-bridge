@@ -36,6 +36,18 @@ class BoxConfig:
     retry_interval_s: float = 15.0
     keepalive_s: float = 60.0
     eos_8bit: bool = False
+    # GPIB (board) settings, as in NI MAX; sent to the box on every connect.
+    # Defaults are NI-488.2's. See gpib_settings.py.
+    gpib_address: int = 0
+    gpib_secondary: int = -1          # -1 = none
+    system_controller: bool = True
+    assert_ren: bool = True
+    autopoll: bool = True
+    cic_protocol: bool = False
+    bus_timing_ns: int = 500          # 2000, 500 or 350
+    hs488_cable_m: int = 0            # 0 = HS488 off
+    board_timeout_s: float = 10
+    ifc_on_connect: bool = False      # pulse IFC after connecting (become CIC at once)
 
 
 class Box:
@@ -114,11 +126,50 @@ class Box:
             try:
                 self.devices.clear()
                 self.enet.open()
+                self.apply_gpib_settings()
                 self.last_failure = None
                 self.last_activity = time.monotonic()
             except (EnetError, OSError, GpibError) as e:
                 self._failed(f"connect failed: {e}", wedged=isinstance(e, EnetTimeout))
                 raise BoxUnavailable(f"{self.name}: {e}") from e
+
+    def apply_gpib_settings(self) -> dict[str, object]:
+        """Send the configured GPIB settings to the box (only those that differ).
+        Returns {key: value read back} for every setting."""
+        from .gpib_settings import SETTINGS
+        actual: dict[str, object] = {}
+        with self.lock:
+            for s in SETTINGS:
+                want = getattr(self.cfg, s.key)
+                try:
+                    have = s.decode(self.enet.ask(s.opt))
+                    if have != want:
+                        self.enet.config(s.opt, s.encode(want))
+                        log.info("%s: %s %s -> %s", self.name, s.label, s.fmt(have),
+                                 s.fmt(want))
+                        have = s.decode(self.enet.ask(s.opt))
+                        if have != want:
+                            log.warning("%s: %s reads back as %s, not %s", self.name,
+                                        s.label, s.fmt(have), s.fmt(want))
+                    actual[s.key] = have
+                except GpibError as e:
+                    log.warning("%s: can't set %s: %s", self.name, s.label, e)
+            # Bus-level calls may legitimately take as long as the board timeout.
+            from .enet import SOCKET_MARGIN_S
+            if self.enet._board:
+                self.enet._board.timeout = max(10.0, float(self.cfg.board_timeout_s)) + SOCKET_MARGIN_S
+            if self.cfg.ifc_on_connect and self.cfg.system_controller:
+                try:
+                    self.enet.ibsic()
+                except GpibError as e:
+                    log.warning("%s: IFC failed: %s", self.name, e)
+        return actual
+
+    def read_gpib_settings(self) -> dict[str, object]:
+        from .gpib_settings import SETTINGS
+        with self.lock:
+            self.ensure_open()
+            return {s.key: s.decode(self.enet.ask(s.opt)) for s in SETTINGS}
 
     def _failed(self, msg: str, wedged: bool) -> None:
         self.last_failure = time.monotonic()

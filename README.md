@@ -93,6 +93,11 @@ Found on the network:
 - **Scan**: lists the instruments that answer on a box's bus, with their VISA
   resource names. If the bridge is running, the scan goes through it (the box
   should have one client); otherwise configure opens a short session itself.
+- **GPIB settings**: the box's GPIB address (primary and secondary), system
+  controller, assert REN, automatic serial polling, CIC protocol, bus timing
+  (T1), HS488 cable length, board timeout and IFC on connect. These are the
+  settings NI MAX offers. `l` reads the box's current values and marks any that
+  differ. The bridge sends the configured values every time it connects.
 - **Network settings**: shows what the box reports about itself (IP, netmask,
   host name, MAC, firmware). The box gets these from DHCP, and neither this
   tool nor NI's can change them. For a fixed address or name, add a DHCP

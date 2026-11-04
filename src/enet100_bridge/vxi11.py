@@ -406,7 +406,7 @@ class Vxi11Server:
                 elif proc == 16:
                     box.enet.set_ren(True)
                     listen = [0x20 + t.pad] + ([0x60 + t.sad] if t.sad else [])
-                    box.enet.ibcmd(bytes([0x3F, 0x5F, 0x40] + listen))
+                    box.enet.ibcmd(bytes([0x3F, 0x5F, 0x40 + box.cfg.gpib_address] + listen))
                     box.enet.ibcmd(b"\x3F\x5F")
                 else:
                     d.local()
@@ -554,11 +554,11 @@ class Vxi11Server:
                         1: bool(lines & 0x1000),        # REN
                         2: bool(lines & 0x2000),        # SRQ
                         3: bool(lines & 0x0200),        # NDAC
-                        4: True,                        # system controller
+                        4: box.cfg.system_controller,   # system controller
                         5: bool(st.sta & 0x0020),       # CIC
                         6: bool(st.sta & 0x0008),       # talker
                         7: bool(st.sta & 0x0004),       # listener
-                        8: 0,                           # our bus address
+                        8: box.cfg.gpib_address,        # our bus address
                     }.get(which)
                     if value is None:
                         raise _GpibFailure(PARAMETER_ERROR)

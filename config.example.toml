@@ -39,6 +39,20 @@ retry_interval_s = 15
 # Off by default: with it on, the box dropped the trailing LF in a VISA capture.
 eos_8bit = false
 
+# GPIB settings, as on NI MAX's GPIB settings page. The bridge sends them to the
+# box every time it connects (the box keeps them until it's power-cycled or
+# another client changes them). These are NI-488.2's defaults.
+gpib_address = 0          # the box's own primary address, 0-30
+gpib_secondary = -1       # its secondary address, 0-30, or -1 for none
+system_controller = true
+assert_ren = true         # assert REN when system controller
+autopoll = true           # automatic serial polling (SRQ events need it)
+cic_protocol = false
+bus_timing_ns = 500       # T1 delay: 2000, 500 or 350
+hs488_cable_m = 0         # HS488 cable length in metres; 0 = HS488 off
+board_timeout_s = 10      # timeout for bus-level operations
+ifc_on_connect = false    # pulse IFC after connecting
+
 # Optional: a shell command that power-cycles the box. The bridge runs it when
 # the box accepts connections but stops answering (wedged), at most once per
 # recovery_cooldown_s. Example for a Home Assistant smart plug:

@@ -141,6 +141,8 @@ class Bridge:
                     reply = bridge.status()
                 elif line.startswith("scan "):
                     reply = bridge.scan(line[5:].strip())
+                elif line.startswith("gpib "):
+                    reply = bridge.gpib_settings(line[5:].strip())
                 elif line == "shutdown":
                     reply = {"ok": True}
                     threading.Thread(target=bridge.stop, daemon=True).start()
@@ -172,6 +174,21 @@ class Bridge:
             with box.lock:
                 box.ensure_open()
                 return {"box": box.name, "listeners": box.enet.find_listeners()}
+        except EnetError as e:
+            box.note_session_lost(e)
+            return {"error": str(e)}
+        except (BoxUnavailable, GpibError) as e:
+            return {"error": str(e)}
+
+    def gpib_settings(self, name: str) -> dict:
+        """The GPIB settings the box currently has, read with ibask."""
+        from .box import BoxUnavailable
+        from .enet import EnetError, GpibError
+        box = next((b for n, b in self.boxes.items() if n.lower() == name.lower()), None)
+        if box is None:
+            return {"error": f"no box named {name!r}"}
+        try:
+            return {"box": box.name, "settings": box.read_gpib_settings()}
         except EnetError as e:
             box.note_session_lost(e)
             return {"error": str(e)}

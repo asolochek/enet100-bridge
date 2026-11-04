@@ -184,6 +184,37 @@ While adding a box, NI MAX sent the box's own record back to it, opcode
 record was byte-for-byte what the box had just reported, and nothing changed.
 What the box does with a modified record is unknown, so don't send one.
 
+## GPIB (board) settings
+
+The settings NI MAX offers for the box are board options, read with ibask
+(0x4E) and set with ibconfig (0x06) on the board session **(live)**. The box
+keeps them across sessions until it is power-cycled. A new session sees
+whatever the last client left, so a client should set what it wants on every
+connect.
+
+| option | setting | values | value on a box after NI use |
+|--------|---------|--------|-----------------------------|
+| 0x01 | primary address | 0–30 | 0 |
+| 0x02 | secondary address | 0 = none, 0x60–0x7E | 0 |
+| 0x03 | board timeout | NI timeout code | 13 (10 s) |
+| 0x07 | automatic serial polling | 0/1 | 1 |
+| 0x08 | CIC protocol | 0/1 | 0 |
+| 0x0A | system controller | 0/1 | 1 |
+| 0x0B | assert REN when SC | 0/1 | 0 (left off by a client) |
+| 0x10 | parallel poll config | | 0 |
+| 0x11 | bus timing (T1) | 1 = 2 µs, 2 = 500 ns, 3 = 350 ns | 2 |
+| 0x17 | send LLO | | 0 |
+| 0x19 | parallel poll time | | 0 |
+| 0x1A | END bit is normal | | 1 |
+| 0x1F | HS488 cable length | 0 = off, 1–15 m | 0 |
+| 0x20 | ist | | 0 |
+| 0x21 | rsv | | 0 |
+
+0x18 (serial poll time) and 0x1B (unaddressing) answer EARG. Changing the bus
+timing (2→1→2) and the primary address (0→1→0) on a live box worked, and the
+instrument kept answering throughout. ibconfig returns the previous value in
+iberr.
+
 ## Bus scans
 
 `ibln` (0x0F) on the board session fails with `8100` / iberr 1 (ECIC) until
