@@ -156,6 +156,13 @@ Needs NI-488.2 on the computer using the instruments.
    Connection Expert's NI-488.2 view all work as for a real ENET/1000.
 3. Instruments are `GPIBn::<address>::INSTR` in any VISA.
 
+Instruments older than `*IDN?` (the HP 3457A, for one) are still identified:
+when `*IDN?` gets no answer within a second, the bridge asks `ID?` and hands
+back the answer as an identity string (`HEWLETT-PACKARD,3457A,0,0`), and
+remembers to do so for that address. Instruments that answer `*IDN?` are never
+sent anything else. The old instrument flags the unknown `*IDN?` as an error,
+as it would with any VISA tool.
+
 The bridge listens on TCP 80, 5000, 5003, 5005 and 5015 for this (the
 installers open them in the firewall). Turn it off with `ni_emulation = false`.
 GPIB settings changed from NI MAX apply to the box's session, which VXI-11

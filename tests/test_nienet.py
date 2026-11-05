@@ -215,3 +215,41 @@ def test_device_info_xml(bridge):
     assert b"<ProdId>\n       0x753B" in xml
     assert b"00:80:2F:12:34:56" in xml or b"00:80:2F:00:00:00" in xml
     assert b"<DevClass>\n       GPIB-ENET" in xml
+
+
+def _idn(ni, d, maxlen=200):
+    d.cmd("620000000000000600000000", b"*IDN?\n")
+    return ni.read(d, maxlen)
+
+
+def test_idn_for_instrument_that_only_knows_id(bridge, fake):
+    # What Connection Expert does: *IDN?, read with no EOS, ~5 s limit.
+    fake.instruments[4].knows_idn = False
+    ni = Ni(bridge.ni["gpib0"].ports)
+    ni.open_board()
+    d = ni._c("cmd")
+    ipport = d.cmd("6306")[3]
+    d.cmd("07020001040000000d000400")                 # EOT only, no EOS, T10s
+    d.cmd("5005"); d.cmd("501001"); d.cmd("50150b"); d.cmd("580101")
+    t = time.monotonic()
+    data, (sta, err, cnt) = _idn(ni, d)
+    assert data == b"HEWLETT-PACKARD,3457A,0,0\n" and sta & 0x2000
+    assert time.monotonic() - t < 4
+    t = time.monotonic()
+    data, (sta, err, cnt) = _idn(ni, d)               # remembered: no wait this time
+    assert data == b"HEWLETT-PACKARD,3457A,0,0\n" and time.monotonic() - t < 0.5
+    # The handle's own settings are back as they were: a plain read still ignores LF.
+    st = bridge.boxes["gpib0"].enet.devices[-1]
+    assert st.tmo == 13
+    ni.close_all()
+
+
+def test_idn_for_scpi_instrument_untouched(bridge, fake):
+    fake.instruments[4] = inst = type(fake.instruments[4])(ident=b"ACME,X1,1,2\n", eoi=True)
+    ni = Ni(bridge.ni["gpib0"].ports)
+    ni.open_board()
+    d, w = ni.open_device(4)
+    data, (sta, err, cnt) = _idn(ni, d)
+    assert data == b"ACME,X1,1,2\n"
+    assert inst.written == [b"*IDN?\n"]
+    ni.close_all()

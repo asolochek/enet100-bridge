@@ -22,6 +22,7 @@ class FakeInstrument:
     """Answers `ID?` like an HP 3457A with END OFF: replies end in CR LF, no EOI."""
     ident: bytes = b"HP3457A\r\n"
     eoi: bool = False
+    knows_idn: bool = True            # False: only ID?, like the real 3457A
     output: bytearray = field(default_factory=bytearray)
     written: list[bytes] = field(default_factory=list)
     stb: int = 0
@@ -34,7 +35,7 @@ class FakeInstrument:
         self.written.append(data)
         for cmd in data.replace(b";", b"\n").split(b"\n"):
             cmd = cmd.strip().upper()
-            if cmd in (b"ID?", b"*IDN?"):
+            if cmd == b"ID?" or (cmd == b"*IDN?" and self.knows_idn):
                 self.output += self.ident
             elif cmd == b"BIG?":
                 self.output += b"".join(b" %13.7E\r\n" % (i * 1.5) for i in range(150))

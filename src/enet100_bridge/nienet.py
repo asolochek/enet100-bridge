@@ -51,6 +51,7 @@ log = logging.getLogger(__name__)
 CMD_PORT, AUX_PORT, KEEP_PORT, WAIT_PORT, HTTP_PORT = 5000, 5003, 5005, 5015, 80
 
 AWAIT_BOX_S = 9.0                      # under NI-488.2's ~10 s open timeout
+IDN_PROBE_TMO = 11                     # 1 s: how long *IDN? (and then ID?) get to answer
 PROD_ID = "0x753B"                    # GPIB-ENET/1000; NI picks the board type from this
 FIRMWARE = "1.2.1f0"                   # what a current ENET/1000 reports
 CMPL = 0x0100
@@ -85,6 +86,20 @@ class _Hangup(Exception):
     """Close the NI connection (the upstream session is gone or unusable)."""
 
 
+def _parse_read(reply: bytes) -> tuple[bytes, int]:
+    """(data, final ibsta) from an ENET/1000-format ibrd reply."""
+    data, off, sta = bytearray(), 0, ERR
+    while off + 4 <= len(reply):
+        flags, n = struct.unpack_from("!HH", reply, off)
+        payload = reply[off + 4:off + 4 + n]
+        off += 4 + n
+        if flags == 0 and off < len(reply):
+            data += payload
+        elif flags == 0 and len(payload) >= 2:
+            sta = struct.unpack_from("!H", payload)[0]
+    return bytes(data), sta
+
+
 def _recvn(sock: socket.socket, n: int) -> bytes | None:
     buf = bytearray()
     while len(buf) < n:
@@ -107,6 +122,8 @@ class Session:
     device: Device | None = None
     closed: bool = False
     channels: list[socket.socket] = field(default_factory=list)
+    idn_pending: bool = False          # last write was *IDN?
+    idn_reply: bytes | None = None     # answer prepared from ID?
 
 
 class NiEnetServer:
@@ -126,6 +143,7 @@ class NiEnetServer:
         self._sessions: dict[tuple[str, int], Session] = {}
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
+        self._id_style: dict[tuple[int, int], str] = {}   # (pad, sad) -> "scpi" | "hp"
 
     # -- identity ----------------------------------------------------------------------------
 
@@ -349,7 +367,115 @@ class NiEnetServer:
             if args[0] == 0x00:
                 s.closed = True                            # NI is done; keep our session
             return OK
+        if s.kind == "device" and s.device is not None:
+            if cmd == 0x62 and data.strip() == b"*IDN?":
+                return self._idn_write(s, block, data)
+            if cmd == 0x16 and s.idn_pending:
+                return self._idn_read(s, block)
+            s.idn_pending = False
+            s.idn_reply = None
         return self._forward(s, cmd, block, data)
+
+    # -- *IDN? for instruments older than it -----------------------------------------------------
+    #
+    # Connection Expert and NI MAX identify instruments with *IDN?, read without a
+    # termination character, and give up after ~5 s. Pre-488.2 HP instruments (the
+    # 3457A, for instance) only know ID?, and end replies with CR LF and no EOI.
+    # When *IDN? gets nothing within IDN_PROBE code, the bridge asks ID? (with reads
+    # ending on LF), and hands the answer back as an *IDN?-style string ending with
+    # EOI. Addresses known to need this skip straight to ID?. Instruments that answer
+    # *IDN? are never sent anything else.
+
+    def _idn_write(self, s: Session, block: bytes, data: bytes) -> bytes:
+        key = (s.device.pad, s.device.sad)
+        s.idn_pending, s.idn_reply = True, None
+        if self._id_style.get(key) == "hp":
+            s.idn_reply = self._ask_hp_id(s)
+            if s.idn_reply is not None:
+                return _status(cnt=len(data))
+            self._id_style.pop(key, None)           # stopped answering ID?; try *IDN? again
+        return self._forward(s, 0x62, block, data)
+
+    def _idn_read(self, s: Session, block: bytes) -> bytes:
+        s.idn_pending = False
+        maxlen = struct.unpack_from("!I", block, 4)[0]
+        if s.idn_reply is not None:
+            reply, s.idn_reply = s.idn_reply, None
+            return self._data_reply(reply[:maxlen])
+        key = (s.device.pad, s.device.sad)
+        if self._id_style.get(key) == "scpi":
+            return self._forward(s, 0x16, block, b"")
+        with self.box.lock:
+            prev = self._dev_config(s, 0x03, IDN_PROBE_TMO)
+            try:
+                reply = self._forward(s, 0x16, block, b"")
+            finally:
+                self._dev_config(s, 0x03, prev)
+            data, sta = _parse_read(reply)
+            if data or not sta & TIMO:
+                self._id_style[key] = "scpi"
+                return reply
+            hp = self._ask_hp_id(s)
+        if hp is None:
+            return reply
+        self._id_style[key] = "hp"
+        log.info("%s: GPIB %d doesn't know *IDN?; answered it from ID? (%r)", self.box.name,
+                 s.device.pad, hp.strip())
+        return self._data_reply(hp[:maxlen])
+
+    def _ask_hp_id(self, s: Session) -> bytes | None:
+        """ID? with reads ending on LF; returns an *IDN?-style reply, or None."""
+        with self.box.lock:
+            old_eos = self._dev_config(s, 0x0F, 0x0A)
+            old_rd = self._dev_config(s, 0x0C, 1)
+            old_tmo = self._dev_config(s, 0x03, IDN_PROBE_TMO)
+            try:
+                st = self._raw_call(s, struct.pack("!B3xI4x", 0x62, 4) + b"ID?\n")
+                if st & ERR:
+                    return None
+                data, sta = _parse_read(self._forward(s, 0x16, struct.pack("!B3xI4x", 0x16, 256), b""))
+            finally:
+                self._dev_config(s, 0x03, old_tmo)
+                self._dev_config(s, 0x0C, old_rd)
+                self._dev_config(s, 0x0F, old_eos)
+        text = data.decode("latin-1").strip()
+        if not text or not text.isprintable():
+            return None
+        if "," in text:
+            return (text + "\n").encode("latin-1")
+        maker, model = ("HEWLETT-PACKARD", text[2:]) if text.upper().startswith("HP") else ("", text)
+        return f"{maker},{model},0,0\n".encode("latin-1")
+
+    def _raw_call(self, s: Session, block_and_data: bytes) -> int:
+        c = self._upstream(s)
+        try:
+            c.send(block_and_data)
+            flags, payload = c.frag()
+        except EnetError as e:
+            self.box.enet.mark_dead()
+            self.box.note_session_lost(e)
+            raise _Hangup(f"upstream call failed: {e}")
+        return struct.unpack_from("!H", payload)[0] if len(payload) >= 2 else ERR
+
+    def _dev_config(self, s: Session, opt: int, val: int) -> int:
+        """Device ibconfig; returns the previous value (the box puts it in iberr)."""
+        c = self._upstream(s)
+        try:
+            c.send(bytes([0x06, opt, val & 0xFF]).ljust(12, b"\0"))
+            flags, payload = c.frag()
+        except EnetError as e:
+            self.box.enet.mark_dead()
+            self.box.note_session_lost(e)
+            raise _Hangup(f"ibconfig failed upstream: {e}")
+        if opt == 0x03:
+            s.device.tmo = val
+            s.device._set_socket_timeout()
+        return struct.unpack_from("!H", payload, 2)[0] if len(payload) >= 4 else 0
+
+    @staticmethod
+    def _data_reply(data: bytes) -> bytes:
+        """An ENET/1000 ibrd reply carrying `data`, ended with EOI."""
+        return (_frag(data) if data else b"") + _frag(b"", 1) + _status(sta=0x2000 | CMPL, cnt=len(data))
 
     def _await_box(self) -> None:
         """Wait (up to AWAIT_BOX_S) for the ENET/100 session, rather than refusing NI.
