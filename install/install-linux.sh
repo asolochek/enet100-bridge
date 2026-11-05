@@ -96,3 +96,4 @@ sleep 2
 systemctl --no-pager status enet100-bridge.service || true
 echo
 echo "Instruments on the box are now TCPIP::$(hostname)::gpib0,<address>::INSTR"
+echo "NI-488.2 hosts can add it in NI MAX (Add GPIB Ethernet Device, address $(hostname)); it shows as an NI GPIB-ENET/1000."

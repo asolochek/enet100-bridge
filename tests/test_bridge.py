@@ -15,6 +15,8 @@ from enet100_bridge.vxi11 import (CMD_BUS_STATUS, CMD_SEND_COMMAND, DEVICE_INTR,
 
 from fake_enet import FakeEnet
 
+NI_TEST_PORTS = {"cmd": 0, "aux": 0, "keep": 0, "wait": 0, "http": 0}
+
 # A discovery reply in the GPIB-ENET/100 layout (example MAC, name and addresses).
 REPLY_HEX = (
     "45440801 4e02c930 4339 00d22dee 00802f123456 0000000000000000"
@@ -62,6 +64,7 @@ def bridge(fake):
                                wait_port=fake.wait_port, use_discovery=False,
                                boot_settle_s=0, retry_interval_s=0, connect_on_start=False))
     b = Bridge(cfg)
+    b.ni_ports = NI_TEST_PORTS
     b.start()
     b.core_port = b._servers[0].server_address[1]
     yield b
@@ -218,6 +221,7 @@ def test_clean_shutdown(fake):
                                wait_port=fake.wait_port, use_discovery=False,
                                boot_settle_s=0, connect_on_start=False))
     b = Bridge(cfg)
+    b.ni_ports = NI_TEST_PORTS
     b.start()
     port = b._servers[0].server_address[1]
     with Vxi11Client("127.0.0.1", "gpib0,4", timeout=1, port=port) as c:

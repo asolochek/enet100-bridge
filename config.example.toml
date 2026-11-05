@@ -57,6 +57,16 @@ hs488_cable_m = 0         # HS488 cable length in metres; 0 = HS488 off
 board_timeout_s = 10      # timeout for bus-level operations
 ifc_on_connect = false    # pulse IFC after connecting
 
+# NI-488.2 access: the box is also offered to NI-488.2 the way a GPIB-ENET/1000
+# is (TCP 5000, 5003, 5005, 5015 and HTTP 80), so NI MAX can add it ("Add GPIB
+# Ethernet Device", enter the bridge's address) and NI MAX / Keysight
+# Connection Expert show it as a GPIB interface, GPIBn::<address>::INSTR.
+# NI-488.2 only accepts the ENET/1000 name, so it is labelled "NI GPIB-ENET/1000";
+# its serial number and MAC are the ENET/100's. The ports are fixed, so a second
+# box needs its own address on the bridge computer (ni_listen).
+ni_emulation = true
+ni_listen = ""            # default: [bridge] listen
+
 # Optional: a shell command that power-cycles the box. The bridge runs it when
 # the box accepts connections but stops answering (wedged), at most once per
 # recovery_cooldown_s. Example for a Home Assistant smart plug:

@@ -153,7 +153,9 @@ function Set-Firewall {
     # Discovery answers arrive as UDP broadcasts from port 44515 to an ephemeral port.
     # Not tied to a program: the venv's python.exe is a launcher for the base interpreter.
     New-NetFirewallRule @common -DisplayName 'enet100-bridge discovery replies' -Protocol UDP -RemotePort 44515 | Out-Null
-    Write-Verbose "Firewall: allowed TCP/UDP 111, TCP $core,$abort, UDP from :44515"
+    # NI-488.2 access (the box shown as a GPIB-ENET/1000): fixed ports, as on a real one.
+    New-NetFirewallRule @common -DisplayName 'enet100-bridge NI-488.2 (TCP 80, 5000, 5003, 5005, 5015)' -Protocol TCP -LocalPort 80, 5000, 5003, 5005, 5015 | Out-Null
+    Write-Verbose "Firewall: allowed TCP/UDP 111, TCP $core,$abort, TCP 80,5000,5003,5005,5015, UDP from :44515"
 }
 
 function Register-Task {
@@ -238,3 +240,6 @@ Start-Sleep -Seconds 3
 Show-Status
 Write-Host ''
 Write-Host 'Instruments on the box are now TCPIP::<this computer>::gpib0,<address>::INSTR'
+Write-Host 'For NI-488.2 / Keysight Connection Expert: in NI MAX, Add GPIB Ethernet Device,'
+Write-Host 'enter this computer''s address. It appears as "NI GPIB-ENET/1000" (NI''s name for the'
+Write-Host 'protocol) with the ENET/100''s serial number; instruments are then GPIBn::<address>::INSTR.'

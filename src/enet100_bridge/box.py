@@ -48,6 +48,11 @@ class BoxConfig:
     hs488_cable_m: int = 0            # 0 = HS488 off
     board_timeout_s: float = 10
     ifc_on_connect: bool = False      # pulse IFC after connecting (become CIC at once)
+    # Present the box to NI-488.2 (NI MAX, Keysight Connection Expert) as a GPIB-ENET/1000
+    # on TCP 5000/5003/5005/5015 + HTTP 80 of `ni_listen`. Those ports are fixed, so each
+    # box needs its own address; by default only the first box gets the bridge's address.
+    ni_emulation: bool = True
+    ni_listen: str = ""               # default: [bridge] listen
 
 
 class Box:

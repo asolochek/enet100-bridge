@@ -152,6 +152,22 @@ class FakeEnet:
                 continue
             cmd, args = blk[0], blk[1:]
             data = b""
+            if cmd == 0x2B and st["kind"] == "board":
+                # FindLstn is two steps (capture 00-findlstn): the header gets a status,
+                # then the u16 address list gets the result: ibcnt = number found, extra =
+                # u16 byte count + the addresses that answered.
+                c.sendall(_status(0x0130))
+                (n,) = struct.unpack_from("!H", blk, 2)
+                data = self._recv(c, n) or b""
+                self.log.append(("board:2b", blk + data))
+                addrs = [a for (a,) in struct.iter_unpack("!H", data)]
+                if not self.cic:
+                    c.sendall(_status(0x8100, 1, 0, b"\0\0"))
+                    continue
+                found = [a for a in addrs if a in self.instruments][:args[4] or 31]
+                c.sendall(_status(0x0130, 0, len(found), struct.pack("!H", 2 * len(found))
+                                  + b"".join(struct.pack("!H", a) for a in found)))
+                continue
             if cmd in (0x61, 0x62):
                 (n,) = struct.unpack_from("!I", blk, 4)
                 data = self._recv(c, n) or b""

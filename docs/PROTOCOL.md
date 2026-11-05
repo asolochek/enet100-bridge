@@ -96,7 +96,7 @@ D: 58 00 01                   offline, then FIN S2 and D
 | 1C | ibsic (IFC) | – | – |
 | 20 | ibtrg (GET) | – | – |
 | 22 | ibwait (on a :5015 channel) | `00 <mask:u16>` | – |
-| 2B | FindLstn | `00 00 <listbytes> 00 <limit>`, then a u16 address list | ibcnt = number found |
+| 2B | FindLstn | `00 00 <listbytes> 00 <limit>`; **two steps**: the header is answered, then the u16 address list is sent and answered | ibcnt = number found; extra = u16 byte count + the addresses found |
 | 4E | ibask | opt:u8 | value in iberr |
 | 50 | session setup | `05` / `10 01` / `15 0B` | iberr ffff |
 | 55 | bind a :5015 channel | see above | iberr ffff |
@@ -221,3 +221,65 @@ iberr.
 `ibln` (0x0F) on the board session fails with `8100` / iberr 1 (ECIC) until
 the box is controller-in-charge **(live)**. Sending IFC (0x1C) first makes it
 CIC, which is what NI's FindLstn does too.
+
+## GPIB-ENET/1000 (what enet100-bridge imitates for NI-488.2)
+
+From captures of NI-488.2 25.8 and NI MAX with a GPIB-ENET/1000 (firmware
+1.2.1f0), and from BLISS's ENET/1000 code. The command set, framing and status
+fragments are the ENET/100's. The differences:
+
+| port | use |
+|------|-----|
+| TCP 5000, 5015 | as on the ENET/100 |
+| TCP 5003, 5005 | side channels, set up per session (below). Nothing seen on them besides the setup and NI's 0x4F polls |
+| HTTP 80 | `/deviceinfo.xml`: NI MAX reads only this when adding a box |
+
+**Board session** (NI-488.2 25.8, `ibfind gpibN`):
+
+```
+B = :5000  0B                    <- status, ibcnt 0809D523, extra 90 bytes:
+                                    "GPIB-ENET/1000" NUL-padded, 04 08 07 at offset 50
+B: 63 06                         <- extra = client IP(4) + client port(2), as the box sees them
+B: 64                            <- extra = u32 session id
+B: 65 00 00 00 <id:4>            (sent on every connection of the session)
+B: 50 05, 50 25, 07 00 18 01 00 00 00 00 0D, 50 10 01
+W = :5015  55 02 00 00 00 00 <port:u16> <ip:4>, 65 <id>
+A = :5003  63 06, 65 <id>
+K = :5005  65 <id>, 4F 22 00 00 <ip:4> <port:u16>   (NI repeats the 4F every second or so)
+A: 50 10 01, 55 01 00 00 00 00 <port> <ip>
+B: 59 00 00 06                   <- extra = serial number, u32 little-endian
+...
+B: 12 00                         ibonl 0, then FIN on every connection
+```
+
+A device handle is the same with `07 02 ...` instead of `0B`, and
+`55 02 00 02 00 00 <port> <ip>` on its :5015 channel. It has no 0x0B.
+
+**ibrd**: no status before the data. Data fragments, the `flags=1` terminator,
+then the final status.
+
+**What NI-488.2 checks.** If the 0x0B reply doesn't name `GPIB-ENET/1000`,
+the driver hangs up straight after it and `ibfind` fails with EDVR. NI MAX
+picks the board type from `<ProdId>` in deviceinfo.xml (0x753B = GPIB-ENET/1000,
+BoardType 0xD9) and ignores `<ProdName>`. It shows `<SerialNo>` and
+`<NormalVersion>`. The box also advertises `_ni._tcp` and `_http._tcp` on port 80
+over mDNS, with TXT `MAC, DevClass=GPIB-ENET, ProdId=0x753B, ProdName, SerialNo,
+Status=Running, ImgPath, Comment`.
+
+deviceinfo.xml (values from an ENET/1000):
+
+```xml
+<Settings>
+    <DevClass>GPIB-ENET</DevClass> <IPAddr>...</IPAddr> <DHCPEnabled>true</DHCPEnabled>
+    <SubnetMask>...</SubnetMask> <Gateway>...</Gateway> <DNSServer>...</DNSServer>
+    <NIPort>80</NIPort> <MAC>00:80:2F:..</MAC> <Hostname>...</Hostname>
+    <ProdId>0x753B</ProdId> <ProdName>GPIB-ENET/1000</ProdName> <SerialNo>1A2B3C4</SerialNo>
+    <NormalVersion>1.2.1f0</NormalVersion> <SafeVersion>1.0.1f0</SafeVersion>
+    <BootVersion>1.0.1f0</BootVersion> <Status>Running</Status>
+    <Link1Status>1000</Link1Status> <Link1Duplex>FULL</Link1Duplex>
+    <ImgPath>/img/gpib-enet.png</ImgPath> <Comment></Comment>
+    <UptimeInSeconds>...</UptimeInSeconds> <ButtonPressed>false</ButtonPressed>
+</Settings>
+```
+
+(Each value sits on its own line, indented, in the real file.)

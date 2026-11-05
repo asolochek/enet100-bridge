@@ -31,24 +31,26 @@ def default_instance_name() -> str:
 
 
 class Advertiser:
-    def __init__(self, instance: str, port: int = 111, txt: dict[str, str] | None = None):
+    def __init__(self, instance: str, port: int = 111, txt: dict[str, str] | None = None,
+                 service_type: str = SERVICE_TYPE):
         self.instance = instance
         self.port = port
         self.txt = txt or {}
+        self.service_type = service_type
         self._impl = None
 
     def start(self) -> bool:
         try:
             if sys.platform == "win32":
-                self._impl = _WindowsDnsSd(self.instance, self.port, self.txt)
+                self._impl = _WindowsDnsSd(self.instance, self.port, self.txt, self.service_type)
             elif AVAHI_FILE.parent.is_dir():
-                self._impl = _AvahiFile(self.instance, self.port, self.txt)
+                self._impl = _AvahiFile(self.instance, self.port, self.txt, self.service_type)
             else:
                 log.info("mDNS: no Avahi on this system; not advertising "
                          "(VXI-11 broadcast discovery still works)")
                 return False
             self._impl.start()
-            log.info("mDNS: advertising %r as %s on port %d", self.instance, SERVICE_TYPE,
+            log.info("mDNS: advertising %r as %s on port %d", self.instance, self.service_type,
                      self.port)
             return True
         except Exception as e:
@@ -68,28 +70,31 @@ class Advertiser:
 # -- Linux: Avahi -------------------------------------------------------------------------------
 
 class _AvahiFile:
-    def __init__(self, instance, port, txt):
+    def __init__(self, instance, port, txt, service_type):
         self.instance, self.port, self.txt = instance, port, txt
+        self.service_type = service_type
+        self.path = AVAHI_FILE if service_type == SERVICE_TYPE else AVAHI_FILE.with_name(
+            f"enet100-bridge-{service_type.strip('_').split('.')[0]}.service")
 
     def start(self):
         from xml.sax.saxutils import escape
         recs = "".join(f"    <txt-record>{escape(k)}={escape(v)}</txt-record>\n"
                        for k, v in self.txt.items())
-        AVAHI_FILE.write_text(
+        self.path.write_text(
             '<?xml version="1.0" standalone="no"?>\n'
             '<!DOCTYPE service-group SYSTEM "avahi-service.dtd">\n'
             "<!-- written by enet100-bridge; removed when it stops -->\n"
             "<service-group>\n"
             f"  <name>{escape(self.instance)}</name>\n"
             "  <service>\n"
-            f"    <type>{SERVICE_TYPE}</type>\n"
+            f"    <type>{self.service_type}</type>\n"
             f"    <port>{self.port}</port>\n"
             f"{recs}"
             "  </service>\n"
             "</service-group>\n", encoding="utf-8")
 
     def stop(self):
-        AVAHI_FILE.unlink(missing_ok=True)
+        self.path.unlink(missing_ok=True)
 
 
 # -- Windows: DnsServiceRegister ------------------------------------------------------------------
@@ -135,8 +140,9 @@ class _WindowsDnsSd:
     DnsServiceConstructInstance (Windows frees and copies it internally, so it
     must not be ctypes-owned memory) and freed after deregistration completes."""
 
-    def __init__(self, instance, port, txt):
+    def __init__(self, instance, port, txt, service_type):
         self.instance, self.port, self.txt = instance, port, txt
+        self.service_type = service_type
         self._req = None
         self._inst = None
         self._keep = []          # ctypes objects that must outlive the registration
@@ -175,7 +181,7 @@ class _WindowsDnsSd:
             # IP4_ADDRESS holds the address in network byte order.
             ip4 = wintypes.DWORD(struct.unpack("<I", socket.inet_aton(_primary_ip(addrs)))[0])
         inst = dnsapi.DnsServiceConstructInstance(
-            f"{self.instance}.{SERVICE_TYPE}.local", f"{socket.gethostname()}.local",
+            f"{self.instance}.{self.service_type}.local", f"{socket.gethostname()}.local",
             ctypes.byref(ip4) if ip4 is not None else None, None, self.port, 0, 0, n,
             ctypes.cast(keys, ctypes.POINTER(wintypes.LPCWSTR)),
             ctypes.cast(values, ctypes.POINTER(wintypes.LPCWSTR)))

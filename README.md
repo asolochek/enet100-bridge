@@ -13,9 +13,17 @@ LAN instruments:
 TCPIP::<bridge host>::gpib0,<address>::INSTR
 ```
 
+It also offers the box to current NI-488.2 the way a GPIB-ENET/1000 is offered,
+so NI MAX can add it and NI MAX and Keysight Connection Expert list it as an
+ordinary GPIB interface:
+
 ```
- VISA app ──VXI-11──▶ enet100-bridge ──NI ENET protocol──▶ GPIB-ENET/100 ──GPIB──▶ instruments
- (any host)           (Windows/Linux/Pi)  TCP 5000/5015
+GPIB2::<address>::INSTR
+```
+
+```
+ VISA app ──VXI-11──────────────▶ enet100-bridge ──NI ENET protocol──▶ GPIB-ENET/100 ──GPIB──▶ instruments
+ NI-488.2 ──ENET/1000 protocol──▶ (Windows/Linux/Pi)  TCP 5000/5015
 ```
 
 No dependencies beyond Python 3.11+. The bridge doesn't need NI-488.2 or NI-VISA.
@@ -27,7 +35,11 @@ Keysight VISA through PyVISA on Windows 11: identify, reads with LF termination,
 150-reading bursts, device clear, serial poll, SRQ events, REN/GTL, writes and
 reads to empty addresses, clean shutdown and reconnect.
 
-Not supported: the GPIB-ENET/1000 (it uses a different handshake), ATN and
+Tested through NI-488.2 25.8 with the box added in NI MAX as GPIB2: ibfind,
+SendIFC, FindLstn, ibdev, ibwrt/ibrd, ibrsp, and NI-VISA/Keysight VISA
+`GPIB2::15::INSTR`, with VXI-11 clients using the box at the same time.
+
+Not supported: talking to a real GPIB-ENET/1000 (the bridge only imitates one), ATN and
 pass-control `docmd`s, and interrupting a call in progress (`device_abort` is
 accepted but the call ends at its own timeout).
 
@@ -130,6 +142,27 @@ dmm.read_termination = "\n"
 print(dmm.query("*IDN?"))
 ```
 
+### As a GPIB interface (NI MAX, Connection Expert)
+
+Needs NI-488.2 on the computer using the instruments.
+
+1. NI MAX: right-click *Devices and Interfaces* → *Add GPIB Ethernet Device*,
+   and enter the bridge computer's address or host name. (Other computers find
+   it in the list, through mDNS; the bridge computer itself has to type it.)
+2. It appears under *Network Devices* as **NI GPIB-ENET/1000 "GPIBn"**, with
+   the ENET/100's serial number. NI-488.2 refuses a box that doesn't call
+   itself an ENET/1000, and NI MAX names boards by product id, so this label
+   can't be changed. The GPIB settings page, *Scan for Instruments* and
+   Connection Expert's NI-488.2 view all work as for a real ENET/1000.
+3. Instruments are `GPIBn::<address>::INSTR` in any VISA.
+
+The bridge listens on TCP 80, 5000, 5003, 5005 and 5015 for this (the
+installers open them in the firewall). Turn it off with `ni_emulation = false`.
+GPIB settings changed from NI MAX apply to the box's session, which VXI-11
+clients share; the bridge's own config wins again when it reconnects.
+
+### As a LAN instrument (VXI-11)
+
 - **Keysight Connection Expert**: add a LAN instrument by host name, choose
   *VXI-11*, and set the remote device name to `gpib0,22`.
 - **NI MAX**: *Create New → VISA TCP/IP Resource → Manual entry of LAN
@@ -184,6 +217,9 @@ Killing the process outright is less polite to the box.
 - `rpc.py`: ONC RPC/XDR, record marking, and a portmapper.
 - `vxi11.py`: the VXI-11 core, abort and interrupt channels.
 - `box.py`: connection management, reconnects, recovery.
+- `nienet.py`: the GPIB-ENET/1000 personality for NI-488.2. NI's sessions are
+  mapped onto the bridge's own ENET/100 sessions, which the bridge opens and
+  closes itself, so NI hanging up mid-setup can't wedge the box.
 - `docs/PROTOCOL.md`: the GPIB-ENET/100 wire protocol, as far as it is known.
 
 Every VXI-11 link to the same address shares one GPIB-ENET device handle. The

@@ -74,6 +74,9 @@ class Bridge:
         self._servers: list[socketserver.BaseServer] = []
         self._registered: list[tuple[int, int, int, int]] = []
         self._mdns = None
+        self._ni_mdns: list = []
+        self.ni: dict = {}                # box name -> NiEnetServer
+        self.ni_ports: dict[str, int] | None = None     # tests: override the fixed ports
         self.stopped = threading.Event()
 
     def start(self) -> None:
@@ -109,8 +112,48 @@ class Bridge:
 
         if c.admin_port:
             self._servers.append(self._serve_admin(c.admin_port))
+        self._start_ni()
         for b in self.boxes.values():
             b.start()
+
+    def _start_ni(self) -> None:
+        """ENET/1000 personality per box, for NI-488.2 (see nienet.py)."""
+        from .nienet import NiEnetServer
+        used: set[str] = set()
+        for b in self.boxes.values():
+            if not b.cfg.ni_emulation:
+                continue
+            addr = b.cfg.ni_listen or self.cfg.listen
+            if addr in used or "0.0.0.0" in used or (addr == "0.0.0.0" and used):
+                log.warning("%s: NI-488.2 access needs its own address (ni_listen); another "
+                            "box already uses %s", b.name, addr)
+                continue
+            srv = NiEnetServer(b, addr, ports=self.ni_ports)
+            try:
+                srv.start()
+            except OSError as e:
+                log.warning("%s: can't listen for NI-488.2 on %s: %s", b.name, addr, e)
+                continue
+            used.add(addr)
+            self.ni[b.name] = srv
+            if self.cfg.mdns and "http" in srv.ports:
+                threading.Thread(target=self._advertise_ni, args=(srv,), daemon=True).start()
+
+    def _advertise_ni(self, srv) -> None:
+        """Advertise as an NI Ethernet GPIB device (_ni._tcp) once the box's MAC and
+        serial are known, so the record carries the real ones."""
+        from .mdns import Advertiser
+        box = srv.box
+        for _ in range(600):
+            if box.info or box.enet.identity or self.stopped.is_set():
+                break
+            self.stopped.wait(1.0)
+        if self.stopped.is_set():
+            return
+        name = f"{box.name} GPIB-ENET100 on {socket.gethostname()}"
+        adv = Advertiser(name, srv.ports["http"], srv.mdns_txt(), service_type="_ni._tcp")
+        if adv.start():
+            self._ni_mdns.append(adv)
 
     def _start_portmapper(self, mappings) -> None:
         mode = self.cfg.portmapper
@@ -216,6 +259,10 @@ class Bridge:
         log.info("shutting down")
         if self._mdns:
             self._mdns.stop()
+        for adv in self._ni_mdns:
+            adv.stop()
+        for srv in self.ni.values():
+            srv.stop()
         self.vxi.stop()
         for s in self._servers:
             try:
