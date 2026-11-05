@@ -95,6 +95,16 @@ def test_query(bridge, fake):
         assert fake.instruments[4].written[-1] == b"ID?"
 
 
+def test_query_when_end_bit_not_normal(bridge, fake):
+    # NI-488.2 clears board option 0x1A on the shared session; then a read that stops
+    # on LF has no END, and the bridge must still report it as ended on the termchar.
+    fake.default_board_opts[0x1A] = 0
+    fake.board_opts[0x1A] = 0
+    with client(bridge, timeout=2) as c:
+        assert c.query("ID?") == "HP3457A\r\n"
+        assert c.query("ID?") == "HP3457A\r\n"
+
+
 def test_read_without_termchar_times_out_with_data(bridge, fake):
     # END OFF instrument: without a termchar, the read can only end at the timeout.
     with client(bridge, timeout=0.3) as c:

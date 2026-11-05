@@ -383,8 +383,11 @@ class Vxi11Server:
         reason = 0
         if st.sta & END:
             reason |= REASON_END
-            if termchar is not None and data.endswith(bytes([termchar])):
-                reason |= REASON_CHR
+        # Judge the termination character from the data, not from END: whether the box
+        # sets END for a read that stopped on the EOS character depends on board option
+        # 0x1A ("END bit is normal"), which NI-488.2 clears on the shared board session.
+        if termchar is not None and data.endswith(bytes([termchar])):
+            reason |= REASON_CHR
         if len(data) >= size and not reason:
             reason = REASON_REQCNT
         return Packer().int(NO_ERROR).int(reason).opaque(data).bytes()

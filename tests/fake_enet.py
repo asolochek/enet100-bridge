@@ -293,7 +293,10 @@ class FakeEnet:
                     if len(out) >= maxlen:
                         break
                     if d["eosrd"] and b[0] == d["eos"]:
-                        sta |= 0x2000
+                        # END for an EOS stop only with board option 0x1A ("END bit
+                        # is normal") set; NI-488.2 clears it (seen live).
+                        if self.board_opts.get(0x1A, 1):
+                            sta |= 0x2000
                         break
                     if not inst.output and inst.eoi:
                         sta |= 0x2000
