@@ -38,6 +38,7 @@ import socket
 import socketserver
 import struct
 import threading
+import time
 from dataclasses import dataclass, field
 from xml.sax.saxutils import escape
 
@@ -49,7 +50,8 @@ log = logging.getLogger(__name__)
 
 CMD_PORT, AUX_PORT, KEEP_PORT, WAIT_PORT, HTTP_PORT = 5000, 5003, 5005, 5015, 80
 
-PROD_ID = "0x753B"                     # GPIB-ENET/1000; NI picks the board type from this
+AWAIT_BOX_S = 9.0                      # under NI-488.2's ~10 s open timeout
+PROD_ID = "0x753B"                    # GPIB-ENET/1000; NI picks the board type from this
 FIRMWARE = "1.2.1f0"                   # what a current ENET/1000 reports
 CMPL = 0x0100
 
@@ -322,10 +324,7 @@ class NiEnetServer:
         # Session setup and ENET/1000-only commands, answered here.
         if cmd == 0x0B:
             s.kind = "board"
-            try:
-                self.box.ensure_open()
-            except BoxUnavailable as e:
-                raise _Hangup(f"box unavailable: {e}")
+            self._await_box()
             return _status(cnt=IDENTIFY_CNT, extra=IDENTIFY_EXTRA)
         if cmd == 0x63:
             return _status(cnt=ID_CNT, extra=socket.inet_aton(s.peer[0]) + struct.pack("!H", s.peer[1]))
@@ -352,10 +351,32 @@ class NiEnetServer:
             return OK
         return self._forward(s, cmd, block, data)
 
+    def _await_box(self) -> None:
+        """Wait (up to AWAIT_BOX_S) for the ENET/100 session, rather than refusing NI.
+
+        NI-488.2 gives up on an open after ~10 s, and Keysight Connection Expert then
+        marks the interface "not present" until its next scan. So if the bridge is still
+        connecting (just started, box rebooting), keep NI waiting a little instead."""
+        deadline = time.monotonic() + AWAIT_BOX_S
+        while True:
+            try:
+                self.box.ensure_open()
+                return
+            except BoxUnavailable as e:
+                if time.monotonic() >= deadline:
+                    raise _Hangup(f"box unavailable: {e}")
+                # ensure_open rate-limits retries; the monitor thread keeps trying too.
+                time.sleep(0.5)
+
     def _open_device(self, s: Session, args: bytes) -> bytes:
         # 07 02 00 <mode> <pad> <sad> <eos> 00 <tmo> 00 04
         mode, pad, sad, eos, tmo = args[2], args[3], args[4], args[5], args[7]
         s.kind = "device"
+        try:
+            self._await_box()
+        except _Hangup as e:
+            log.warning("%s: NI ibdev %d: %s", self.box.name, pad, e)
+            return EDVR
         try:
             with self.box.lock:
                 self.box.ensure_open()
